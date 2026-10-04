@@ -36,6 +36,7 @@ import { Brand, Choice, Failure, Field, Loading } from "./components/shared";
 import { useResource } from "./hooks/use-resource";
 import { Automations, ArchivePage, Dashboard, Contacts } from "./pages";
 import { Builder } from "./Builder";
+import { DisconnectSettings } from "./DisconnectSettings";
 import { PasswordSettings } from "./PasswordSettings";
 import { readWorkspaceLocation, useWorkspaceHistory } from "./hooks/use-workspace-history";
 
@@ -59,6 +60,7 @@ export function App() {
   const [session, setSession] = useState<Session | null | undefined>();
   const [message, setMessage] = useState("");
   const [bootKey, setBootKey] = useState(0);
+  const [workspaceReset, setWorkspaceReset] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     try {
@@ -123,7 +125,9 @@ export function App() {
     );
   return (
     <Workspace
-      key={session.email}
+      key={`${session.email}:${workspaceReset}`}
+      resetNotice={workspaceReset > 0}
+      onReset={() => { history.replaceState(history.state, "", "#automations"); setWorkspaceReset(n => n + 1); }}
       session={session}
       onSession={setSession}
       onLogout={() => {
@@ -250,10 +254,14 @@ function Login({
   );
 }
 function Workspace({
+  resetNotice,
+  onReset,
   session,
   onLogout,
   onSession,
 }: {
+  resetNotice: boolean;
+  onReset(): void;
   session: Session;
   onLogout(): void;
   onSession(session: Session): void;
@@ -265,7 +273,7 @@ function Workspace({
   const [notice, setNotice] = useState<{
     message: string;
     error: boolean;
-  } | null>(null);
+  } | null>(resetNotice ? { message: "Instagram disconnected. All workspace automation data was deleted. You remain signed in.", error: false } : null);
   const [draft, setDraft] = useState<Draft | null>(() => initialLocation.page === "create" ? defaultDraft() : null);
   const [saved, setSaved] = useState(() => initialLocation.page === "create" ? JSON.stringify(defaultDraft()) : "");
   const [draftGeneration, setDraftGeneration] = useState(0);
@@ -570,6 +578,9 @@ function Workspace({
       </nav>
       <AccountDialog
         open={account}
+        connection={status.data}
+        dirty={dirty}
+        onDisconnect={onReset}
         onSession={onSession}
         onOpenChange={setAccount}
         session={session}
@@ -596,6 +607,9 @@ function Workspace({
   );
 }
 function AccountDialog({
+  connection,
+  dirty = false,
+  onDisconnect,
   open,
   onOpenChange,
   session,
@@ -603,6 +617,9 @@ function AccountDialog({
   logout,
   onSession,
 }: {
+  connection?: Status;
+  dirty?: boolean;
+  onDisconnect?: () => void;
   open: boolean;
   onOpenChange(open: boolean): void;
   session?: Session;
@@ -648,6 +665,7 @@ function AccountDialog({
           />
         </div>
         {session && onSession && <PasswordSettings key={String(open)} changed={onSession} />}
+        {connection?.connected && onDisconnect && <DisconnectSettings status={connection} dirty={dirty} done={onDisconnect} />}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline">

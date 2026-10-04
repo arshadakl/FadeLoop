@@ -42,6 +42,7 @@ export interface Media {
   comments_count?: number;
 }
 export interface Status {
+  connection_generation: number;
   connected: boolean;
   token_expired?: boolean;
   username?: string;

@@ -1887,3 +1887,10 @@
 .legal-brand-nav .legal-theme { margin: 0; }
 @media (max-width: 1279px) { .drive-folders { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 767px) { .drive-folders { grid-template-columns: minmax(0, 1fr); } }
+
+.disconnect-dialog { max-height: calc(100dvh - 2rem); overflow-y: auto; padding-bottom: max(1.5rem, env(safe-area-inset-bottom)); }
+.disconnect-dialog [data-slot="dialog-close"] { width: 44px; height: 44px; display: grid; place-items: center; top: .5rem; right: .5rem; }
+.disconnect-dialog [data-slot="dialog-title"] { padding-right: 2rem; }
+.disconnect-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }
+.disconnect-actions button { white-space: normal; height: auto; min-height: 44px; }
+@media (max-width: 480px) { .disconnect-actions { flex-direction: column; } .disconnect-actions button { width: 100%; } }
