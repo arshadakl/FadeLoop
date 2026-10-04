@@ -888,7 +888,7 @@ The interface uses React, TypeScript, Vite, Tailwind CSS, and customized shadcn/
 
 See [frontend development, verification, preview, and rollback](docs/frontend.md) for the complete workflow.
 
-See [folders and Any comment](docs/automation-settings.md) for organization, trigger eligibility, and migration 0007. Signed-in password changes are available from account settings; [authentication documentation](docs/authentication.md) records the measured Free-plan CPU limitation. This combined release must pass its target-plan CPU checks before production deployment.
+See [folders and Any comment](docs/automation-settings.md) for organization, trigger eligibility, and migration 0007. [Password-confirmed Instagram disconnect](docs/instagram-disconnect.md) permanently resets the local workspace and requires migration 0008 before deployment. Signed-in password changes are available from account settings; [authentication documentation](docs/authentication.md) records the measured Free-plan CPU limitation. This combined release must pass its target-plan CPU checks before production deployment.
 
 ## Project layout
 

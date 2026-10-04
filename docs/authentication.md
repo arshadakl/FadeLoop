@@ -23,6 +23,8 @@ Enter the existing email and a new password. Credential versioning immediately i
 
 ## Browser and CLI sessions
 
+Instagram disconnect is a separate password-confirmed, permanent workspace reset. It preserves owner accounts and sessions; see [reset behavior, API and migration 0008](instagram-disconnect.md). It uses the same Argon2id parameters and remains subject to the Free-plan CPU release limitation below.
+
 `POST /session/login` accepts JSON `{ "email": "...", "password": "..." }` and the same-origin `Origin` header. `GET /session` returns only `email` and `expires_at`. `POST /session/logout` revokes the session and clears its cookie. Sessions last seven days without sliding renewal. Responses are not cached.
 
 Cookies use `__Host-fadeloop_session`, `HttpOnly`, `Secure`, `SameSite=Lax`, and `Path=/`. D1 stores SHA-256 hashes of random 256-bit session tokens. Mutations require an exact matching Origin header; Instagram onboarding also accepts same-origin navigation metadata. Five attempts per hashed email/IP bucket are permitted in a fixed 15-minute window. Successful requests give back their reserved slot; previous failures remain counted.
