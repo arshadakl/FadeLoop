@@ -1,19 +1,8 @@
-/* FadeLoop web UI (Section 7A). Vanilla JS SPA served from the Worker. A single-owner token
-   (stored in localStorage) authorizes every /api call. The UI is a config editor + monitor over
-   the same campaigns/events/conversations tables the engine uses — no new funnel behavior. */
-
-const TOKEN_KEY = "fadeloop_token";
-// Move existing sessions to the new brand's key without requiring another sign-in.
-const LEGACY_TOKEN_KEY = "chatmany_token";
-const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY);
-if (legacyToken) {
-  if (!localStorage.getItem(TOKEN_KEY)) localStorage.setItem(TOKEN_KEY, legacyToken);
-  localStorage.removeItem(LEGACY_TOKEN_KEY);
-}
-const GH_URL = "https://github.com/arshadakl/FadeLoop";
+/* FadeLoop dashboard. Presentation and session management only; campaign behavior stays unchanged. */
+try { localStorage.removeItem('fadeloop_token'); localStorage.removeItem('chatmany_token'); } catch {}
 
 const store = {
-  token: localStorage.getItem(TOKEN_KEY) || "",
+  session: null,
   status: null,
   page: "automations",
   media: [],
@@ -50,16 +39,26 @@ const esc = (s) =>
 const slug = (s) =>
   String(s || "campaign").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "campaign";
 
+// Safari keeps the layout viewport tall when its keyboard opens; use the visible viewport.
+function syncKeyboardChrome() {
+  const editing = document.activeElement?.matches('input, textarea, select');
+  const height = window.visualViewport?.height ?? innerHeight;
+  document.documentElement.classList.toggle('keyboard-open', Boolean(editing && innerHeight - height > 140));
+}
+window.visualViewport?.addEventListener('resize', syncKeyboardChrome);
+document.addEventListener('focusin', () => requestAnimationFrame(syncKeyboardChrome));
+document.addEventListener('focusout', () => requestAnimationFrame(syncKeyboardChrome));
+
 async function api(path, { method = "GET", body } = {}) {
   const res = await fetch(path, {
     method,
-    headers: { authorization: `Bearer ${store.token}`, ...(body ? { "content-type": "application/json" } : {}) },
+    credentials: "same-origin",
+    headers: { ...(body ? { "content-type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) {
-    store.token = "";
-    localStorage.removeItem(TOKEN_KEY);
-    renderLogin("Session token was rejected. Enter it again.");
+    store.session = null;
+    renderLogin("Your session has ended. Please sign in again.");
     throw new Error("unauthorized");
   }
   const ct = res.headers.get("content-type") || "";
@@ -69,7 +68,7 @@ async function api(path, { method = "GET", body } = {}) {
 }
 
 function toast(msg, isErr = false) {
-  const t = el(`<div class="toast ${isErr ? "err" : ""}">${esc(msg)}</div>`);
+  const t = el(`<div role="status" class="toast ${isErr ? "err" : ""}">${esc(msg)}</div>`);
   document.body.appendChild(t);
   requestAnimationFrame(() => t.classList.add("show"));
   setTimeout(() => {
@@ -100,46 +99,77 @@ const ICON = {
 
 /* ---------------- boot ---------------- */
 async function boot() {
-  if (!store.token) return renderLogin();
   try {
-    store.status = await api("/api/status");
-  } catch {
-    return; // renderLogin already shown on 401
+    const response = await fetch('/session', { credentials: 'same-origin' });
+    if (response.status === 401) return renderLogin();
+    if (!response.ok) throw new Error('Unable to load session');
+    store.session = await response.json();
+    store.status = await api('/api/status');
+    renderApp();
+  } catch (error) {
+    if (error.message !== 'unauthorized') renderLogin('Unable to connect. Check your connection and try again.');
   }
-  renderApp();
 }
 
-/* ---------------- login / connect ---------------- */
-function renderLogin(err) {
-  document.title = "FadeLoop — sign in";
-  const app = $("#app");
-  app.innerHTML = "";
-  const card = el(`
-    <div class="login-wrap"><div class="login-card">
-      <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">FadeLoop</span></div>
-      <h2>Owner sign in</h2>
-      <p>Enter the owner token you set as the <code>OWNER_TOKEN</code> secret.</p>
-      ${err ? `<div class="banner">${esc(err)}</div>` : ""}
-      <label class="field"><span class="label">Owner token</span>
-        <input type="password" id="tok" placeholder="Your OWNER_TOKEN" autocomplete="off" /></label>
-      <button class="btn primary" id="go" style="width:100%">Continue</button>
-    </div></div>`);
-  app.appendChild(card);
-  const submit = async () => {
-    const val = $("#tok").value.trim();
-    if (!val) return;
-    store.token = val;
+function renderLogin(message = '') {
+  document.title = 'Sign in | FadeLoop';
+  $('#app').innerHTML = `<main class="login-wrap"><section class="login-card">
+    <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">FadeLoop</span></div>
+    <div class="eyebrow">YOUR CREATOR WORKSPACE</div><h1>Welcome back</h1>
+    <p>Sign in to manage your automations and turn conversations into connections.</p>
+    <form id="loginform">
+      <div id="loginerror" class="banner" role="alert" ${message ? '' : 'hidden'}>${esc(message)}</div>
+      <label class="field" for="email"><span class="label">Email address</span><input type="email" id="email" name="email" autocomplete="username" placeholder="you@example.com" required maxlength="254"></label>
+      <div class="field"><label class="label" for="password">Password</label><span class="password-field"><input type="password" id="password" name="password" autocomplete="current-password" required maxlength="256" aria-describedby="password-hint"><button class="password-toggle" type="button" aria-label="Show password" aria-pressed="false">Show</button></span><small id="password-hint">Use 8–128 characters.</small></div>
+      <button class="btn primary login-submit" type="submit">Sign in</button>
+    </form>
+    <p class="recovery-hint">Forgot your password? Contact your instance administrator to reset it.</p>
+    <div class="login-footer"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><button class="theme-shortcut" type="button">Appearance</button></div>
+  </section></main>`;
+  $('.password-toggle').onclick = event => {
+    const input = $('#password'); const visible = input.type === 'password'; input.type = visible ? 'text' : 'password';
+    event.currentTarget.textContent = visible ? 'Hide' : 'Show'; event.currentTarget.setAttribute('aria-label', visible ? 'Hide password' : 'Show password'); event.currentTarget.setAttribute('aria-pressed', String(visible));
+  };
+  $('.theme-shortcut').onclick = () => openAccountMenu(false);
+  $('#loginform').onsubmit = async event => {
+    event.preventDefault(); const button = $('.login-submit'); button.disabled = true; button.textContent = 'Signing in...';
+    const error = $('#loginerror'); error.hidden = true;
     try {
-      store.status = await api("/api/status");
-      localStorage.setItem(TOKEN_KEY, val);
-      renderApp();
-    } catch {
-      /* 401 handled */
+      const length = [...$('#password').value].length;
+      if (length < 8 || length > 128) throw new Error('Password must contain 8–128 characters.');
+      const response = await fetch('/session/login', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: $('#email').value, password: $('#password').value }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to sign in. Please try again.');
+      store.session = data; store.status = await api('/api/status'); $('#password').value = ''; renderApp();
+    } catch (failure) {
+      $('#password').value = ''; $('#password').type = 'password';
+      const toggle = $('.password-toggle'); toggle.textContent = 'Show'; toggle.setAttribute('aria-label', 'Show password'); toggle.setAttribute('aria-pressed', 'false');
+      error.textContent = failure instanceof TypeError ? 'Unable to connect. Check your connection and try again.' : failure.message; error.hidden = false;
+      button.disabled = false; button.textContent = 'Sign in';
     }
   };
-  $("#go").onclick = submit;
-  $("#tok").onkeydown = (e) => {
-    if (e.key === "Enter") submit();
+}
+
+function openAccountMenu(signedIn = true) {
+  const dialog = el(`<dialog class="account-dialog" aria-labelledby="account-heading"><div class="dialog-head"><h2 id="account-heading">${signedIn ? 'Your workspace' : 'Appearance'}</h2><button class="btn ghost sm close-dialog" aria-label="Close menu">Close</button></div>
+    ${signedIn ? '<p class="account-email">' + esc(store.session?.email) + '</p><button class="btn ghost archive-menu">' + ICON.archive + 'Archive</button>' : ''}
+    <div class="field"><label class="label" for="theme-choice">Appearance</label><select id="theme-choice"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+    <div class="account-links"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/data-deletion">Data deletion</a></div>
+    ${signedIn ? '<button class="btn danger logout-button">Sign out</button>' : ''}</dialog>`);
+  document.body.appendChild(dialog); dialog.showModal();
+  $('#theme-choice', dialog).value = window.fadeTheme.get(); $('#theme-choice', dialog).onchange = event => window.fadeTheme.set(event.target.value);
+  $('.close-dialog', dialog).onclick = () => dialog.close(); dialog.addEventListener('close', () => dialog.remove());
+  dialog.onclick = event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } };
+  if (!signedIn) return;
+  $('.archive-menu', dialog).onclick = () => {
+    if (store.page === 'create' && !confirmDiscard('leave this page')) return;
+    store.page = 'archive'; dialog.close(); paintNav(); route();
+  };
+  $('.logout-button', dialog).onclick = async event => {
+    if (store.page === 'create' && !confirmDiscard('sign out')) return;
+    event.currentTarget.disabled = true;
+    try { await api('/session/logout', { method: 'POST' }); dialog.close(); location.reload(); }
+    catch (error) { event.currentTarget.disabled = false; toast(error.message, true); }
   };
 }
 
@@ -151,6 +181,7 @@ function renderApp() {
   app.innerHTML = "";
   const layout = el(`
     <div class="layout">
+      <header class="mobile-header"><div class="brand"><span class="spark">${ICON.spark}</span><span class="name">FadeLoop</span></div><button class="btn ghost sm account-trigger" aria-label="Open account menu">Account</button></header>
       <aside class="sidebar">
         <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">FadeLoop</span></div>
         <nav class="nav">
@@ -161,6 +192,7 @@ function renderApp() {
           <button class="nav-item" data-page="archive">${ICON.archive}<span>Archive</span></button>
         </nav>
         <div class="sidebar-footer">
+          <button class="btn ghost account-trigger">Account & appearance</button>
           <div class="profile">
             <img class="avatar" src="${s.profile_picture_url || ""}" alt="" onerror="this.style.visibility='hidden'"/>
             <div class="who">
@@ -168,7 +200,6 @@ function renderApp() {
               <span class="tag">self-hosted</span>
             </div>
           </div>
-          <a class="gh-link" href="${GH_URL}" target="_blank" rel="noopener">${ICON.github}<span>Star on GitHub</span></a>
           <div class="legal-links">
             <a href="/privacy" target="_blank" rel="noopener">Privacy</a>
             <span>·</span>
@@ -177,6 +208,7 @@ function renderApp() {
         </div>
       </aside>
       <main class="main"><div class="main-wrap" id="view"></div></main>
+      <nav class="mobile-nav" aria-label="Main navigation">${["automations", "create", "dashboard", "contacts"].map(page => `<button class="nav-item" data-page="${page}">${ICON[page]}<span>${page === "create" ? "Create" : page[0].toUpperCase() + page.slice(1)}</span></button>`).join("")}<button class="nav-item more-trigger">${ICON.grid}<span>More</span></button></nav>
     </div>`);
   app.appendChild(layout);
   layout.querySelectorAll(".nav-item").forEach((b) => {
@@ -187,18 +219,18 @@ function renderApp() {
       route();
     };
   });
+  layout.querySelectorAll(".account-trigger, .more-trigger").forEach(button => button.onclick = () => openAccountMenu());
   paintNav();
   route();
 }
 
 function paintNav() {
-  document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.page === store.page));
+  document.querySelectorAll(".nav-item").forEach((b) => { const active = b.dataset.page === store.page || (b.classList.contains("more-trigger") && store.page === "archive"); b.classList.toggle("active", active); if (active) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
 }
 
-// /auth/authorize is owner-gated. A link navigation cannot send an Authorization header, so the
-// token goes in the query; the redirect it returns sets Referrer-Policy: no-referrer.
+// The same-origin session cookie authenticates onboarding without credentials in the URL.
 function authorizeUrl() {
-  return `/auth/authorize?token=${encodeURIComponent(store.token)}`;
+  return "/auth/authorize";
 }
 
 function connectBanner() {
@@ -333,9 +365,9 @@ async function renderAutomations() {
       <button class="btn primary" id="newauto">+ New automation</button>
     </div>
     <div class="automations-toolbar">
-      <div class="search-wrap">${ICON.search}<input class="search" id="autosearch" type="text" placeholder="Search all automations" value="${esc(store.automationsSearch)}"/></div>
-      <select id="autotrigger"><option>Any trigger</option><option>Comment</option></select>
-      <select id="autostate"><option value="">Any trigger states</option>
+      <div class="search-wrap">${ICON.search}<input class="search" id="autosearch" aria-label="Search automations" type="text" placeholder="Search all automations" value="${esc(store.automationsSearch)}"/></div>
+      <select id="autotrigger" aria-label="Trigger type"><option>Any trigger</option><option>Comment</option></select>
+      <select id="autostate" aria-label="Automation status"><option value="">Any trigger states</option>
         <option value="live" ${store.automationsState === "live" ? "selected" : ""}>Live</option>
         <option value="stopped" ${store.automationsState === "stopped" ? "selected" : ""}>Stopped</option>
       </select>
@@ -376,7 +408,7 @@ function paintAutoList() {
   });
 
   if (store.campaigns.length === 0) {
-    box.innerHTML = `<div class="empty">${ICON.automations}<div>No automations yet. Click "+ New automation" to build your first comment-to-DM funnel.</div></div>`;
+    box.innerHTML = `<div class="empty">${ICON.automations}<div>No automations yet. Tap "+ New automation" to build your first comment-to-DM funnel.</div></div>`;
     return;
   }
   if (rows.length === 0) {
@@ -407,8 +439,8 @@ function paintAutoList() {
     const kw = (c.keywords || [])[0] || "—";
     const checked = store.selectedAutomations.has(c.campaign_id);
     const row = el(`
-      <div class="auto-row ${checked ? "selected" : ""}" data-id="${esc(c.campaign_id)}">
-        <input type="checkbox" ${checked ? "checked" : ""}/>
+      <div class="auto-row ${checked ? "selected" : ""}" data-id="${esc(c.campaign_id)}" tabindex="0" role="group" aria-label="${esc(c.name || c.campaign_id)}">
+        <label class="row-select"><input type="checkbox" aria-label="Select ${esc(c.name || c.campaign_id)}" ${checked ? "checked" : ""}/></label>
         <div class="auto-name-cell">
           <div class="auto-name-line">
             <span class="status-pill ${c.active ? "live" : "stopped"}">${c.active ? "live" : "stopped"}</span>
@@ -420,10 +452,11 @@ function paintAutoList() {
             <span class="kw-pill">${esc(kw)}</span>
           </div>
         </div>
-        <div><span class="num">${stats.runs}</span></div>
-        <div><span class="num">${stats.runs > 0 ? stats.ctr + "%" : "n/a"}</span></div>
-        <div class="muted">${timeAgo(c.updated_at)}</div>
+        <div data-label="Runs"><span class="num">${stats.runs}</span></div>
+        <div data-label="CTR"><span class="num">${stats.runs > 0 ? stats.ctr + "%" : "n/a"}</span></div>
+        <div class="muted" data-label="Modified">${timeAgo(c.updated_at)}</div>
       </div>`);
+    row.querySelector(".row-select").onclick = event => event.stopPropagation();
     row.querySelector('input[type="checkbox"]').onclick = (e) => {
       e.stopPropagation();
       if (e.target.checked) store.selectedAutomations.add(c.campaign_id);
@@ -431,6 +464,7 @@ function paintAutoList() {
       paintAutoList();
     };
     row.onclick = () => openInBuilder(c);
+    row.onkeydown = event => { if (event.target === row && ["Enter", " "].includes(event.key)) { event.preventDefault(); openInBuilder(c); } };
     box.appendChild(row);
   });
 
@@ -458,7 +492,7 @@ async function renderArchive() {
       <div><div class="page-title">Archive</div><div class="page-sub">Stopped automations, kept out of the way but not deleted — restore any of them at any time.</div></div>
     </div>
     <div class="automations-toolbar">
-      <div class="search-wrap">${ICON.search}<input class="search" id="archsearch" type="text" placeholder="Search archived automations" value="${esc(store.archiveSearch)}"/></div>
+      <div class="search-wrap">${ICON.search}<input class="search" id="archsearch" aria-label="Search archived automations" type="text" placeholder="Search archived automations" value="${esc(store.archiveSearch)}"/></div>
     </div>
     <div id="archlist"></div>`;
 
@@ -600,21 +634,22 @@ async function renderCreate() {
   // top bar
   const top = el(`
     <div class="builder-topbar">
-      <input class="name" id="cname" value="${esc(d.name)}" />
+      <input type="text" aria-label="Automation name" class="name" id="cname" value="${esc(d.name)}" />
       <span class="status-pill ${d.active ? "live" : "stopped"}" id="statuspill">${d.active ? "live" : "stopped"}</span>
       <div class="spacer"></div>
-      <select id="loadsel" style="width:auto"><option value="">New automation…</option>${store.campaigns
+      <select id="loadsel" aria-label="Load automation" style="width:auto"><option value="">New automation…</option>${store.campaigns
         .map((c) => `<option value="${esc(c.campaign_id)}" ${c.campaign_id === d.campaign_id ? "selected" : ""}>${esc(c.name || c.campaign_id)}</option>`)
         .join("")}</select>
       ${d.campaign_id ? `<button class="btn danger sm" id="deletebtn">${ICON.trash} Delete</button>` : ""}
-      <button class="btn ghost sm" id="savebtn" title="Changes do not take effect until saved">Save</button>
-      <button class="btn primary sm" id="golive">${d.active ? "Stop" : "Go live"}</button>
+      <div class="builder-actions"><button class="btn ghost sm" id="savebtn" title="Changes do not take effect until saved">Save</button>
+      <button class="btn primary sm" id="golive">${d.active ? "Stop" : "Go live"}</button></div>
     </div>`);
   view.appendChild(top);
 
-  const split = el(`<div class="builder"><div class="sections" id="sections"></div><div class="preview-col" id="previewcol"></div></div>`);
+  const split = el(`<div class="builder"><div class="sections" id="sections"></div><details class="preview-col" open><summary>Live preview</summary><div id="previewcol"></div></details></div>`);
   view.appendChild(split);
 
+  if (matchMedia("(max-width: 767px)").matches) $(".preview-col").open = false;
   renderSections();
   renderPreview();
   refreshDirtyUI();
@@ -673,7 +708,7 @@ function renderSections() {
     store.media.length > 0
       ? shownMedia
           .map(
-            (m) => `<div class="media-thumb ${m.id === d.media_id ? "selected" : ""}" data-mid="${esc(m.id)}" data-thumb="${esc(m.thumbnail_url || m.media_url || "")}">
+            (m) => `<div class="media-thumb ${m.id === d.media_id ? "selected" : ""}" tabindex="0" role="button" aria-label="Select post ${esc(m.caption || m.id)}" aria-pressed="${m.id === d.media_id}" data-mid="${esc(m.id)}" data-thumb="${esc(m.thumbnail_url || m.media_url || "")}">
               <img src="${esc(m.thumbnail_url || m.media_url || "")}" alt="" loading="lazy"/></div>`,
           )
           .join("")
@@ -700,14 +735,14 @@ function renderSections() {
       <div class="radio-row selected"><span class="radio-dot"></span><div><div class="rr-title">A specific word or words</div></div></div>
       <label class="field"><span class="label">Keywords (comma separated)</span>
         <input type="text" id="keywords" value="${esc(d.keywords.join(", "))}" placeholder="Link, Guide"/></label>
-      <div class="chips" id="kwchips">${["Price", "Link", "Shop"].map((k) => `<span class="chip" data-kw="${k}">${k}</span>`).join("")}</div>
+      <div class="chips" id="kwchips">${["Price", "Link", "Shop"].map((k) => `<button type="button" class="chip" data-kw="${k}">${k}</button>`).join("")}</div>
       <label class="field" style="margin-top:14px"><span class="label">Exclude words (optional)</span>
         <input type="text" id="exclude" value="${esc((d.exclude || []).join(", "))}" placeholder="scam, fake"/></label>
       <div class="radio-row disabled"><span class="radio-dot"></span><div><div class="rr-title">Any word</div><div class="rr-sub">Soon</div></div></div>
 
       <div style="margin-top:8px">
         <div class="toggle-row"><div><div class="tr-title">Reply to their comment</div><div class="tr-sub">Post a public reply under the comment (rotates to look human).</div></div>
-          <label class="switch"><input type="checkbox" id="pr_enabled" ${d.public_reply.enabled ? "checked" : ""}/><span class="slider"></span></label></div>
+          <label class="switch"><input type="checkbox" id="pr_enabled" aria-label="Enable public reply" ${d.public_reply.enabled ? "checked" : ""}/><span class="slider"></span></label></div>
         <div id="pr_texts_wrap" style="${d.public_reply.enabled ? "" : "display:none"}">
           <label class="field"><span class="label">Public replies (one per line, rotated)</span>
             <textarea id="pr_texts">${esc((d.public_reply.texts || []).join("\n"))}</textarea></label>
@@ -720,19 +755,19 @@ function renderSections() {
     <div class="card">
       <h3><span class="section-num">3</span>They will get</h3>
       <div class="toggle-row"><div><div class="tr-title">An opening DM</div><div class="tr-sub">Sent as a private reply with a button so it survives the Requests folder. Required to start the funnel.</div></div>
-        <label class="switch"><input type="checkbox" id="opening_enabled" ${d.opening_enabled ? "checked" : ""}/><span class="slider"></span></label></div>
+        <label class="switch"><input type="checkbox" id="opening_enabled" aria-label="Enable opening message" ${d.opening_enabled ? "checked" : ""}/><span class="slider"></span></label></div>
       <div id="opening_wrap" style="${d.opening_enabled ? "" : "display:none"}">
         <label class="field"><span class="label">Opening message</span><textarea id="c_opening">${esc(d.copy.opening)}</textarea></label>
         <label class="field"><span class="label">Button label</span><input type="text" id="c_opening_button" maxlength="20" value="${esc(d.copy.opening_button)}"/><span class="hint">Instagram allows 20 characters on a button.</span></label>
       </div>
       <div class="toggle-row"><div><div class="tr-title">Ask them to follow you first</div><div class="tr-sub">Self-attestation — the tap advances (the API can’t verify a specific follow).</div></div>
-        <label class="switch"><input type="checkbox" id="check_follow" ${d.check_follow ? "checked" : ""}/><span class="slider"></span></label></div>
+        <label class="switch"><input type="checkbox" id="check_follow" aria-label="Ask users to follow" ${d.check_follow ? "checked" : ""}/><span class="slider"></span></label></div>
       <div id="follow_wrap" style="${d.check_follow ? "" : "display:none"}">
         <label class="field"><span class="label">Follow message</span><textarea id="c_follow_gate">${esc(d.copy.follow_gate)}</textarea></label>
         <label class="field"><span class="label">Follow button label</span><input type="text" id="c_follow_button" maxlength="20" value="${esc(d.copy.follow_button)}"/><span class="hint">Instagram allows 20 characters on a button.</span></label>
       </div>
       <div class="toggle-row"><div><div class="tr-title">Ask for their email</div><div class="tr-sub">Uses Instagram’s email chip, with a typed-reply fallback.</div></div>
-        <label class="switch"><input type="checkbox" id="ask_email" ${d.ask_email ? "checked" : ""}/><span class="slider"></span></label></div>
+        <label class="switch"><input type="checkbox" id="ask_email" aria-label="Ask for email" ${d.ask_email ? "checked" : ""}/><span class="slider"></span></label></div>
       <div id="email_wrap" style="${d.ask_email ? "" : "display:none"}">
         <label class="field"><span class="label">Email ask message</span><textarea id="c_email_ask">${esc(d.copy.email_ask)}</textarea></label>
       </div>
@@ -758,9 +793,10 @@ function wireSections() {
     t.onclick = () => {
       d.media_id = t.dataset.mid;
       d.media_thumb = t.dataset.thumb;
-      $("#mediagrid").querySelectorAll(".media-thumb").forEach((x) => x.classList.toggle("selected", x === t));
+      $("#mediagrid").querySelectorAll(".media-thumb").forEach((x) => { x.classList.toggle("selected", x === t); x.setAttribute("aria-pressed", String(x === t)); });
       renderPreview();
     };
+    t.onkeydown = event => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); t.click(); } };
   });
   const seeMore = $("#mediaSeeMore");
   if (seeMore) {
@@ -1055,9 +1091,9 @@ async function renderDashboard() {
     <div class="page-head"><div><div class="page-title">Dashboard</div><div class="page-sub">Performance from logged funnel events.</div></div>
       <div class="toolbar">
         <div class="select-inline"><span class="muted">Campaign</span>
-          <select id="dashcamp"><option value="">All campaigns</option>${store.campaigns.map((x) => `<option value="${esc(x.campaign_id)}" ${x.campaign_id === store.dashCampaign ? "selected" : ""}>${esc(x.name || x.campaign_id)}</option>`).join("")}</select></div>
+          <select id="dashcamp" aria-label="Dashboard campaign"><option value="">All campaigns</option>${store.campaigns.map((x) => `<option value="${esc(x.campaign_id)}" ${x.campaign_id === store.dashCampaign ? "selected" : ""}>${esc(x.name || x.campaign_id)}</option>`).join("")}</select></div>
         <div class="select-inline"><span class="muted">Range</span>
-          <select id="dashdays">${[7, 30, 90].map((n) => `<option value="${n}" ${n === store.dashDays ? "selected" : ""}>Last ${n} days</option>`).join("")}</select></div>
+          <select id="dashdays" aria-label="Dashboard date range">${[7, 30, 90].map((n) => `<option value="${n}" ${n === store.dashDays ? "selected" : ""}>Last ${n} days</option>`).join("")}</select></div>
       </div>
     </div>
     <div class="metrics">
@@ -1119,7 +1155,7 @@ async function renderContacts() {
     <div class="page-head"><div><div class="page-title">Contacts</div><div class="page-sub">Everyone who entered a campaign.</div></div>
       <div class="toolbar">
         <div class="select-inline"><span class="muted">Campaign</span>
-          <select id="ccamp"><option value="">All campaigns</option>${store.campaigns.map((x) => `<option value="${esc(x.campaign_id)}" ${x.campaign_id === store.contactsCampaign ? "selected" : ""}>${esc(x.name || x.campaign_id)}</option>`).join("")}</select></div>
+          <select id="ccamp" aria-label="Contacts campaign"><option value="">All campaigns</option>${store.campaigns.map((x) => `<option value="${esc(x.campaign_id)}" ${x.campaign_id === store.contactsCampaign ? "selected" : ""}>${esc(x.name || x.campaign_id)}</option>`).join("")}</select></div>
         <button class="btn ghost sm" id="exportcsv">Export CSV</button>
       </div>
     </div>
@@ -1135,9 +1171,9 @@ async function renderContacts() {
         el(`<div class="contact-row">
           <div class="who"><div class="av">${esc(initial)}</div><span class="uname">${r.username ? "@" + esc(r.username) : esc(r.igsid)}</span></div>
           <div><span class="pill ${pillClass(r.state)}">${esc(r.status_label)}</span></div>
-          <div class="col-hide">${r.followed ? "✓ followed" : '<span class="dash">—</span>'}</div>
-          <div class="col-hide">${r.email ? esc(r.email) : '<span class="dash">—</span>'}</div>
-          <div class="col-hide muted">${new Date(r.updated_at * 1000).toLocaleDateString()}</div>
+          <div class="col-hide" data-label="Follow">${r.followed ? "✓ followed" : '<span class="dash">—</span>'}</div>
+          <div class="col-hide" data-label="Email">${r.email ? esc(r.email) : '<span class="dash">—</span>'}</div>
+          <div class="col-hide muted" data-label="Updated">${new Date(r.updated_at * 1000).toLocaleDateString()}</div>
         </div>`),
       );
     });
@@ -1148,11 +1184,12 @@ async function renderContacts() {
     renderContacts();
   };
   $("#exportcsv").onclick = async () => {
-    // Fetch with the auth header (not a token in the URL) and download the blob.
+    // Download through the same protected session as other API requests.
     try {
       const res = await fetch("/api/contacts/export?" + qs.toString(), {
-        headers: { authorization: `Bearer ${store.token}` },
+        credentials: "same-origin",
       });
+      if (res.status === 401) { renderLogin("Your session has ended. Please sign in again."); throw new Error("Please sign in again."); }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const a = document.createElement("a");

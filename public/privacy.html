@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Privacy Policy — FadeLoop</title>
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/styles.css" />
     <link
       rel="icon"
@@ -27,7 +28,7 @@
     <div class="doc">
       <a class="back" href="/">← FadeLoop</a>
       <h1>Privacy Policy</h1>
-      <p class="meta">Last updated: August 2026</p>
+      <p class="meta">Last updated: October 2026</p>
 
       <p>
         FadeLoop is a self-hosted tool: this specific instance is run by its owner on their own
@@ -67,10 +68,14 @@
         </tr>
       </table>
 
+      <h2>Dashboard account and sessions</h2>
+      <p>D1 stores the instance owner?s email and a salted Argon2id password hash, never a plaintext password. Dashboard login is separate from Instagram OAuth.</p>
+      <p>A Secure, HttpOnly, SameSite=Lax cookie keeps the owner signed in for up to seven days. D1 stores only a hash of the session token. Logout revokes that session; administrator password reset revokes every session. Login protection stores hashed email/IP buckets for 15 minutes; Instagram connection requests expire after 10 minutes. Expired records are removed during successful sign-in. Browser storage remembers appearance preferences.</p>
+
       <h2>What this instance does not do</h2>
       <ul>
         <li>No scraping — every read or write goes through the official Meta Instagram API</li>
-        <li>No password collection — Instagram login happens on Instagram's own page via OAuth</li>
+        <li>No Instagram password collection — Instagram login happens on Instagram's own page via OAuth</li>
         <li>No selling, renting, or sharing this data with any third party</li>
         <li>No advertising or tracking use of this data beyond running the owner's own automations</li>
       </ul>

@@ -18,7 +18,6 @@ export interface Env {
   // secrets (wrangler secret put ...)
   APP_ID: string;
   APP_SECRET: string;
-  OWNER_TOKEN: string;
   WEBHOOK_VERIFY_TOKEN?: string;
 }
 
@@ -66,6 +65,9 @@ export interface Campaign {
   name?: string;
   media_id: string;
   keywords: string[];
+  match_mode?: "keywords" | "any";
+  /** Server-owned eligibility boundary; ignored in incoming configuration. */
+  activated_at?: number;
   exclude?: string[];
   public_reply?: PublicReplyConfig;
   /** @deprecated Instagram's API cannot like comments. Accepted for backwards compatibility; ignored. */

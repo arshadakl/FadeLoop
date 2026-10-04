@@ -1,6 +1,5 @@
-// FadeLoop Worker entry point. `fetch` serves the OAuth onboarding + owner API routes;
-// `scheduled` runs the polling crons and the daily token refresh. The UI (Section 7A) will be
-// added later and served from this same Worker.
+// FadeLoop Worker entry point. `fetch` serves the dashboard, owner sessions and OAuth routes;
+// `scheduled` runs the existing polling crons and daily Instagram token refresh.
 
 import type { Env } from "./types";
 import { buildRuntime, pollIntervalSeconds } from "./runtime";
@@ -12,24 +11,50 @@ import { handleAuthorize, handleCallback, handleDisconnect, handleStatus } from 
 import { handleConfigExport, handleConfigImport } from "./routes/config";
 import { handleWebhookAdmin, handleWebhookEvent, handleWebhookVerify } from "./routes/webhook";
 import { handleApi } from "./routes/api";
-import { isOwner, json } from "./routes/http";
+import { json } from "./routes/http";
+import { getSession, handleSession, sameOrigin } from "./auth/session";
 
 const POLL_CRON = "* * * * *";
 const REFRESH_CRON = "0 3 * * *";
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    const result = await routeRequest(req, env);
+    // Asset fetch responses have immutable headers in workerd.
+    const response = new Response(result.body, result);
+    const path = new URL(req.url).pathname;
+    if (/^\/(api|auth|session|config|admin)(\/|$)/.test(path)) response.headers.set("cache-control", "no-store");
+    response.headers.set("x-content-type-options", "nosniff");
+    if (!response.headers.has("referrer-policy")) response.headers.set("referrer-policy", "same-origin");
+    return response;
+  },
+
+  async scheduled(event: ScheduledController, env: Env): Promise<void> {
+    if (event.cron === REFRESH_CRON) {
+      const result = await refreshTokenIfDue(env);
+      console.log(`[FadeLoop] token refresh: ${result.status}`);
+      return;
+    }
+    if (event.cron === POLL_CRON) {
+      const interval = pollIntervalSeconds(env);
+      if (interval === null) return;
+      await runPoll(env, interval);
+    }
+  },
+} satisfies ExportedHandler<Env>;
+
+async function routeRequest(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     const { pathname } = url;
     const method = req.method.toUpperCase();
 
     // --- public routes ---
     if (pathname === "/health") return json({ ok: true, mode: env.MODE });
+    if (pathname === "/session" || pathname.startsWith("/session/")) return handleSession(req, env, pathname);
 
-    // OAuth onboarding. /auth/callback must stay public — Instagram itself calls it, with no
-    // owner token — so the takeover guard lives in handleCallback (it refuses to overwrite an
-    // existing connection with a different account). /auth/authorize is owner-only, below.
-    if (pathname === "/auth/callback" && method === "GET") return handleCallback(env, url);
+    // OAuth callback is publicly routable. The browser supplies its owner session cookie;
+    // handleCallback verifies session-bound state and protects the existing Instagram account.
+    if (pathname === "/auth/callback" && method === "GET") return handleCallback(env, url, req);
 
     // Webhook (only meaningful when MODE=webhook; verification is always safe to answer).
     if (pathname === "/webhook" && method === "GET") return handleWebhookVerify(env, url);
@@ -37,7 +62,8 @@ export default {
 
     // --- owner-only API + admin routes ---
     if (pathname.startsWith("/api/")) {
-      if (!isOwner(req, url, env)) return json({ error: "unauthorized" }, 401);
+      if (!await getSession(req, env.DB)) return json({ error: "unauthorized" }, 401);
+      if (!["GET", "HEAD"].includes(method) && !sameOrigin(req)) return json({ error: "Forbidden origin" }, 403);
       return handleApi(env, req, url);
     }
     const ownerRoutes = new Set([
@@ -50,8 +76,10 @@ export default {
       "/admin/webhook",
     ]);
     if (ownerRoutes.has(pathname)) {
-      if (!isOwner(req, url, env)) return json({ error: "unauthorized" }, 401);
-      if (pathname === "/auth/authorize" && method === "GET") return handleAuthorize(env);
+      const session = await getSession(req, env.DB);
+      if (!session) return json({ error: "unauthorized" }, 401);
+      if ((!["GET", "HEAD"].includes(method) || pathname === "/auth/authorize") && !sameOrigin(req, pathname === "/auth/authorize")) return json({ error: "Forbidden origin" }, 403);
+      if (pathname === "/auth/authorize" && method === "GET") return handleAuthorize(env, session);
       if (pathname === "/auth/status" && method === "GET") return handleStatus(env);
       if (pathname === "/auth/disconnect" && method === "POST") return handleDisconnect(env);
       if (pathname === "/config/import" && method === "POST") return handleConfigImport(env, req);
@@ -77,23 +105,7 @@ export default {
       return env.ASSETS.fetch(new Request(new URL("/index.html", url.origin), req));
     }
     return json({ error: "not found" }, 404);
-  },
-
-  async scheduled(event: ScheduledController, env: Env): Promise<void> {
-    if (event.cron === REFRESH_CRON) {
-      const result = await refreshTokenIfDue(env);
-      console.log(`[FadeLoop] token refresh: ${result.status}`);
-      return;
-    }
-    if (event.cron === POLL_CRON) {
-      // In webhook mode this drops to a slow reconciliation sweep rather than stopping — see
-      // pollIntervalSeconds for why push alone loses leads. null means polling is off entirely.
-      const interval = pollIntervalSeconds(env);
-      if (interval === null) return;
-      await runPoll(env, interval);
-    }
-  },
-} satisfies ExportedHandler<Env>;
+}
 
 /**
  * Run comment + message polls, honoring the caller's poll interval (>= cron granularity).

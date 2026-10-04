@@ -3,40 +3,40 @@
 
 import { buildAuthorizeUrl, exchangeCodeForShortLivedToken, exchangeForLongLivedToken } from "../auth/oauth";
 import { InstagramClient, WEBHOOK_FIELDS } from "../api/client";
-import { clearAuth, getAuth, kvGet, kvSet, now, saveAuth } from "../db";
+import { clearAuth, getAuth, now, saveAuth } from "../db";
+import { digest, getSession, randomToken, timestamp } from "../auth/session";
+import type { OwnerSession } from "../auth/session";
 import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
 import { getCommentPollError } from "../poller/commentPoll";
 import type { Env } from "../types";
 import { json, redirect, html } from "./http";
 
-const STATE_KEY = "oauth_state";
-
-function randomState(): string {
-  return crypto.randomUUID().replace(/-/g, "");
-}
-
 /** GET /auth/authorize — start the OAuth flow. */
-export async function handleAuthorize(env: Env): Promise<Response> {
+export async function handleAuthorize(env: Env, session: OwnerSession): Promise<Response> {
   if (!env.APP_ID || !env.APP_SECRET) {
     return json({ error: "APP_ID/APP_SECRET not configured" }, 500);
   }
-  const state = randomState();
-  await kvSet(env.DB, STATE_KEY, state);
+  const state = randomToken();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM owner_oauth_states WHERE expires_at <= ? OR session_hash = ?").bind(timestamp(), session.token_hash),
+    env.DB.prepare("INSERT INTO owner_oauth_states (state_hash, session_hash, expires_at) VALUES (?, ?, ?)").bind(await digest(state), session.token_hash, timestamp() + 600),
+  ]);
   return redirect(buildAuthorizeUrl(env.APP_ID, env.REDIRECT_URI, state));
 }
 
 /** GET /auth/callback — exchange the code, verify the account is professional, store the token. */
-export async function handleCallback(env: Env, url: URL): Promise<Response> {
+export async function handleCallback(env: Env, url: URL, req: Request): Promise<Response> {
+  const session = await getSession(req, env.DB);
+  const state = url.searchParams.get("state");
+  if (!session || !state || !/^[a-f0-9]{64}$/.test(state)) return html("<h1>Connection expired</h1><p>Return to FadeLoop and connect Instagram again.</p>", 400);
+  const consumed = await env.DB.prepare("DELETE FROM owner_oauth_states WHERE state_hash = ? AND session_hash = ? AND expires_at > ?").bind(await digest(state), session.token_hash, timestamp()).run();
+  if (!consumed.meta.changes) return html("<h1>Invalid or expired connection request</h1><p>Return to FadeLoop and connect Instagram again.</p>", 400);
   const error = url.searchParams.get("error");
   if (error) {
     return html(`<h1>Connection cancelled</h1><p>${escapeHtml(error)}</p>`, 400);
   }
   const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
   if (!code) return html("<h1>Missing authorization code</h1>", 400);
-
-  const expected = await kvGet(env.DB, STATE_KEY);
-  if (!expected || state !== expected) return html("<h1>Invalid state (possible CSRF)</h1>", 400);
 
   try {
     const short = await exchangeCodeForShortLivedToken(env.APP_ID, env.APP_SECRET, env.REDIRECT_URI, code);
@@ -74,6 +74,8 @@ export async function handleCallback(env: Env, url: URL): Promise<Response> {
       );
     }
 
+    // Logout or operator reset during the Meta exchange cancels this connection attempt.
+    if (!await getSession(req, env.DB)) return html("<h1>Connection expired</h1><p>Sign in to FadeLoop and connect Instagram again.</p>", 400);
     await saveAuth(env.DB, {
       access_token: long.accessToken,
       expires_at: now() + long.expiresIn,
@@ -107,14 +109,14 @@ export async function handleCallback(env: Env, url: URL): Promise<Response> {
         console.warn(`[FadeLoop] webhook subscribe failed: ${detail}`);
         webhookNote =
           `<p>⚠️ Connected, but subscribing this account to webhooks failed:</p><pre>${detail}</pre>` +
-          `<p>Polling still works. To get instant delivery, retry with <code>POST /admin/webhook</code> using your owner token.</p>`;
+          `<p>Polling still works. Your instance administrator can retry the webhook subscription.</p>`;
       }
     }
 
     return html(
       `<h1>Connected ✅</h1>
        <p>@${escapeHtml(me.username ?? "your account")} is now connected to FadeLoop.</p>
-       <p>Token valid ~60 days; it auto-refreshes. You can close this tab.</p>
+       <p>Your connection refreshes automatically. <a href="/">Return to FadeLoop</a>.</p>
        ${webhookNote}`,
     );
   } catch (e) {

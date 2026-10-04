@@ -7,15 +7,15 @@ import { Engine } from "../src/engine/engine";
 import { SendQueue } from "../src/queue/queue";
 import { getConversation, upsertCampaign } from "../src/db";
 import type { Campaign, NormalizedComment, NormalizedMessage } from "../src/types";
-import { applyMigration, makeTestDbWithHandle, migrationFiles } from "./helpers/fakeD1";
+import { applyMigration, makeTestDbWithHandle } from "./helpers/fakeD1";
 import { FakeClient } from "./helpers/fakeClient";
 
 const T = Math.floor(Date.now() / 1000);
 const fast = () => new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 });
 
-/** The migration before the newest one — i.e. what a deployment that has not been updated looks like. */
-const PREVIOUS = migrationFiles().at(-2)!.replace(/\.sql$/, "");
-const LATEST = migrationFiles().at(-1)!;
+/** Pin the funnel migration these regression cases exercise; auth migrations add no funnel columns. */
+const PREVIOUS = "0004_email_retries";
+const LATEST = "0005_tap_retries.sql";
 
 function campaign(over: Partial<Campaign> = {}): Campaign {
   return {

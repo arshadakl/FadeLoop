@@ -78,6 +78,19 @@ async function envFor(mode: string, over: Partial<Campaign> = {}): Promise<Env> 
 beforeEach(() => { runtime = null; });
 
 describe("MODE does not gate the push path", () => {
+  it("Any comment accepts only new timestamped emoji comments and deduplicates delayed pushes", async () => {
+    const env = await envFor("polling", { match_mode: "any", keywords: [] });
+    const after = new Date((Math.floor(Date.now() / 1000) + 1) * 1000).toISOString();
+    const push = commentPush();
+    const value = push.entry[0]!.changes[0]!.value;
+    value.text = "👋";
+    for (const [index, date] of [undefined, "invalid", new Date((T - 60) * 1000).toISOString(), after].entries()) {
+      const raw = JSON.stringify({ entry: [{ changes: [{ field: "comments", value: { ...value, id: `any${index}`, from: { id: `anyuser${index}` }, timestamp: date } }] }] });
+      expect((await handleWebhookEvent(env, post(raw, await sign(raw)))).status).toBe(200);
+      if (index === 3) await handleWebhookEvent(env, post(raw, await sign(raw)));
+    }
+    expect(client.calls.privateReply).toHaveLength(1);
+  });
   it.each(["polling", "webhook"])('a signed comment event is dispatched with MODE=%s', async (mode) => {
     const env = await envFor(mode);
     const raw = JSON.stringify(commentPush());
