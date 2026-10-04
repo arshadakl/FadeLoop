@@ -1,0 +1,24 @@
+{
+  "mode": "polling",
+  "poll_interval_seconds": 90,
+  "campaigns": [
+    {
+      "campaign_id": "summer-drop",
+      "media_id": "17891234567890",
+      "keywords": ["LINK", "GUIDE"],
+      "exclude": ["scam"],
+      "public_reply": { "enabled": true, "texts": ["Sent you a DM! 📩", "Check your DMs 👀"] },
+      "check_follow": true,
+      "ask_email": true,
+      "reward": { "type": "link", "value": "https://example.com/guide" },
+      "copy": {
+        "opening": "Hey! Tap below to grab the guide 👇",
+        "opening_button": "Send me the guide",
+        "follow_gate": "Make sure you're following so you don't miss the next one 🙌 Not following yet? Follow, then tap below.",
+        "follow_button": "✅ I followed",
+        "email_ask": "Want it in your inbox too? Tap your email or reply with it.",
+        "delivery": "Here you go 🎉 {reward}"
+      }
+    }
+  ]
+}
