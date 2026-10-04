@@ -1,6 +1,7 @@
 // Builds the per-invocation runtime (API client + send queue + engine) from stored auth.
 // Returns null when no account is connected or the token has lapsed.
 
+import { assertConnection, guardedConnectionDb } from "./connection";
 import { InstagramClient } from "./api/client";
 import { SendQueue } from "./queue/queue";
 import { Engine } from "./engine/engine";
@@ -8,6 +9,7 @@ import { getAuth, now } from "./db";
 import type { AuthRow, Env } from "./types";
 
 export interface Runtime {
+  db: D1Database;
   client: InstagramClient;
   queue: SendQueue;
   engine: Engine;
@@ -26,10 +28,12 @@ export async function buildRuntime(env: Env): Promise<Runtime | null> {
     return null;
   }
   const igUserId = auth.ig_user_id ?? "me";
-  const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId);
-  const queue = new SendQueue();
-  const engine = new Engine(env.DB, client, queue);
-  return { client, queue, engine, auth, igUserId };
+  const check = () => assertConnection(env.DB, auth.connection_generation);
+  const db = guardedConnectionDb(env.DB, auth.connection_generation);
+  const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId, check);
+  const queue = new SendQueue({ beforeAttempt: check });
+  const engine = new Engine(db, client, queue);
+  return { client, queue, engine, auth, igUserId, db };
 }
 
 const MIN_POLL_SECONDS = 30;

@@ -114,6 +114,7 @@ export type NormalizedEvent = NormalizedComment | NormalizedMessage;
 
 /** Stored auth row. */
 export interface AuthRow {
+  connection_generation: number;
   access_token: string;
   ig_user_id: string | null;
   username: string | null;

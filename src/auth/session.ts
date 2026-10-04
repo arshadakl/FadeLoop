@@ -45,7 +45,7 @@ function throttled(expires: number): Response {
   return response;
 }
 
-async function boundedBody(req: Request): Promise<string | null> {
+export async function boundedBody(req: Request): Promise<string | null> {
   if (Number(req.headers.get("content-length")) > 4096) return null;
   if (!req.body) return "";
   const reader = req.body.getReader();

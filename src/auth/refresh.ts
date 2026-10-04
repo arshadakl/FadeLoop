@@ -1,3 +1,4 @@
+import { guardedConnectionDb } from "../connection";
 // Token refresh (Section 9). Runs on the daily cron. A long-lived token must be >24h old and
 // unexpired to refresh; refreshing extends it ~60 days. If it lapses past 60 days it is dead and
 // the owner must re-connect. We refresh proactively when within ~30 days of expiry.
@@ -44,7 +45,7 @@ export async function refreshTokenIfDue(env: Env): Promise<RefreshResult> {
   try {
     const { access_token, expires_in } = await refreshLongLivedToken(env.GRAPH_VERSION, auth.access_token);
     const expiresAt = now() + expires_in;
-    await saveAuth(env.DB, { access_token, expires_at: expiresAt });
+    await saveAuth(guardedConnectionDb(env.DB, auth.connection_generation), { access_token, expires_at: expiresAt });
     console.log(`[FadeLoop] token refreshed; new expiry ${new Date(expiresAt * 1000).toISOString()}`);
     return { status: "refreshed", expiresAt };
   } catch (e) {

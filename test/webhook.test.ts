@@ -69,6 +69,7 @@ async function envFor(mode: string, over: Partial<Campaign> = {}): Promise<Env> 
   client = new FakeClient();
   await upsertCampaign(db, campaign(over), true);
   runtime = {
+    auth: { connection_generation: 0 },
     engine: new Engine(db, client as never, new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 })),
     igUserId: "me",
   };

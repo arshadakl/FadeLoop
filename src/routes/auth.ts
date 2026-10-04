@@ -1,9 +1,10 @@
+import { assertConnection, connectionGeneration, connectionGuard } from "../connection";
 // OAuth onboarding routes (Section 4A). "Connect Instagram" → authorize redirect → callback
 // code exchange → long-lived token stored in auth. Plus connection status + disconnect.
 
 import { buildAuthorizeUrl, exchangeCodeForShortLivedToken, exchangeForLongLivedToken } from "../auth/oauth";
 import { InstagramClient, WEBHOOK_FIELDS } from "../api/client";
-import { clearAuth, getAuth, now, saveAuth } from "../db";
+import { getAuth, now, saveAuth } from "../db";
 import { digest, getSession, randomToken, timestamp } from "../auth/session";
 import type { OwnerSession } from "../auth/session";
 import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
@@ -17,7 +18,9 @@ export async function handleAuthorize(env: Env, session: OwnerSession): Promise<
     return json({ error: "APP_ID/APP_SECRET not configured" }, 500);
   }
   const state = randomToken();
+  const generation = await connectionGeneration(env.DB);
   await env.DB.batch([
+    connectionGuard(env.DB, generation, false),
     env.DB.prepare("DELETE FROM owner_oauth_states WHERE expires_at <= ? OR session_hash = ?").bind(timestamp(), session.token_hash),
     env.DB.prepare("INSERT INTO owner_oauth_states (state_hash, session_hash, expires_at) VALUES (?, ?, ?)").bind(await digest(state), session.token_hash, timestamp() + 600),
   ]);
@@ -29,6 +32,7 @@ export async function handleCallback(env: Env, url: URL, req: Request): Promise<
   const session = await getSession(req, env.DB);
   const state = url.searchParams.get("state");
   if (!session || !state || !/^[a-f0-9]{64}$/.test(state)) return html("<h1>Connection expired</h1><p>Return to FadeLoop and connect Instagram again.</p>", 400);
+  const generation = await connectionGeneration(env.DB);
   const consumed = await env.DB.prepare("DELETE FROM owner_oauth_states WHERE state_hash = ? AND session_hash = ? AND expires_at > ?").bind(await digest(state), session.token_hash, timestamp()).run();
   if (!consumed.meta.changes) return html("<h1>Invalid or expired connection request</h1><p>Return to FadeLoop and connect Instagram again.</p>", 400);
   const error = url.searchParams.get("error");
@@ -83,7 +87,7 @@ export async function handleCallback(env: Env, url: URL, req: Request): Promise<
       username: me.username ?? null,
       account_type: me.account_type ?? null,
       profile_picture_url: me.profile_picture_url ?? null,
-    });
+    }, { generation, sessionHash: session.token_hash, credentialVersion: session.credential_version });
 
     // Subscribe the account to the app's webhooks — ALWAYS, not only when MODE is "webhook".
     //
@@ -101,7 +105,7 @@ export async function handleCallback(env: Env, url: URL, req: Request): Promise<
     let webhookNote = "";
     {
       try {
-        const client2 = new InstagramClient(long.accessToken, env.GRAPH_VERSION, incomingUserId);
+        const client2 = new InstagramClient(long.accessToken, env.GRAPH_VERSION, incomingUserId, () => assertConnection(env.DB, generation + 1));
         await client2.subscribeToWebhooks();
         webhookNote = `<p>Subscribed this account to <code>${escapeHtml(WEBHOOK_FIELDS)}</code> webhooks. Events arrive instantly once the callback URL is set in your Meta app; polling keeps running underneath either way.</p>`;
       } catch (e) {
@@ -120,6 +124,8 @@ export async function handleCallback(env: Env, url: URL, req: Request): Promise<
        ${webhookNote}`,
     );
   } catch (e) {
+    if (!await getSession(req, env.DB)) return html("<h1>Connection expired</h1><p>Sign in to FadeLoop and connect Instagram again.</p>", 400);
+    if (await connectionGeneration(env.DB) !== generation) return html("<h1>Connection changed</h1><p>Return to FadeLoop and connect Instagram again.</p>", 409);
     return html(`<h1>Connection failed</h1><pre>${escapeHtml(e instanceof Error ? e.message : String(e))}</pre>`, 500);
   }
 }
@@ -127,7 +133,7 @@ export async function handleCallback(env: Env, url: URL, req: Request): Promise<
 /** GET /auth/status — connection status (owner-only). */
 export async function handleStatus(env: Env): Promise<Response> {
   const auth = await getAuth(env.DB);
-  if (!auth) return json({ connected: false });
+  if (!auth) return json({ connected: false, connection_generation: await connectionGeneration(env.DB) });
   // Poll health. A stalled poller used to be completely invisible from the outside: the dashboard
   // looked fine while no message had been processed for hours. poll_age_seconds is the tell —
   // a healthy message poll refreshes its cursor every tick, so anything beyond a few minutes
@@ -137,6 +143,7 @@ export async function handleStatus(env: Env): Promise<Response> {
   const commentPollError = await getCommentPollError(env.DB);
   return json({
     connected: true,
+    connection_generation: auth.connection_generation,
     username: auth.username,
     account_type: auth.account_type,
     profile_picture_url: auth.profile_picture_url,
@@ -148,12 +155,6 @@ export async function handleStatus(env: Env): Promise<Response> {
     poll_error: pollError,
     comment_poll_error: commentPollError,
   });
-}
-
-/** POST /auth/disconnect — clear the token (owner-only). */
-export async function handleDisconnect(env: Env): Promise<Response> {
-  await clearAuth(env.DB);
-  return json({ disconnected: true });
 }
 
 function escapeHtml(s: string): string {

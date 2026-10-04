@@ -8,6 +8,7 @@ import { InstagramApiError } from "../api/client";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface QueueOptions {
+  beforeAttempt?: () => Promise<void>;
   /** Minimum spacing between sends, ms. Paces us well under ~200 DMs/hr. */
   minIntervalMs?: number;
   /** Max retries on rate-limit errors before giving up on that send. */
@@ -18,11 +19,13 @@ export interface QueueOptions {
 
 export class SendQueue {
   private lastSendAt = 0;
+  private readonly beforeAttempt: () => Promise<void>;
   private readonly minIntervalMs: number;
   private readonly maxRetries: number;
   private readonly baseBackoffMs: number;
 
   constructor(opts: QueueOptions = {}) {
+    this.beforeAttempt = opts.beforeAttempt ?? (async () => {});
     this.minIntervalMs = opts.minIntervalMs ?? 1200;
     this.maxRetries = opts.maxRetries ?? 3;
     this.baseBackoffMs = opts.baseBackoffMs ?? 1000;
@@ -40,6 +43,7 @@ export class SendQueue {
     let attempt = 0;
     for (;;) {
       try {
+        await this.beforeAttempt();
         const result = await fn();
         this.lastSendAt = Date.now();
         return result;

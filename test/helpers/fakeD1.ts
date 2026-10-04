@@ -41,8 +41,12 @@ class FakeD1 {
   }
   async batch(stmts: FakeStmt[]): Promise<{ meta: { changes: number } }[]> {
     const out: { meta: { changes: number } }[] = [];
-    for (const s of stmts) out.push(await s.run());
-    return out;
+    this.db.exec("BEGIN");
+    try {
+      for (const s of stmts) out.push(await s.run());
+      this.db.exec("COMMIT");
+      return out;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 }
 

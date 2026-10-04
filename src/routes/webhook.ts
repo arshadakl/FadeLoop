@@ -1,3 +1,4 @@
+import { connectionGeneration } from "../connection";
 // Inbound webhooks. NOTE: this route is NOT gated on MODE — if Meta is configured to push to
 // /webhook, those events are verified and dispatched to the engine immediately, whatever MODE says.
 //
@@ -94,6 +95,7 @@ export async function handleWebhookAdmin(env: Env, method: string): Promise<Resp
 
 /** POST /webhook — verify signature, then dispatch normalized events to the engine. */
 export async function handleWebhookEvent(env: Env, req: Request): Promise<Response> {
+  const generation = await connectionGeneration(env.DB);
   const raw = await req.text();
   const sig = req.headers.get("x-hub-signature-256");
   if (!(await verifySignature(env.APP_SECRET, raw, sig))) {
@@ -108,7 +110,7 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
   }
 
   const rt = await buildRuntime(env);
-  if (!rt) return json({ ok: true, note: "no account connected" });
+  if (!rt || rt.auth.connection_generation !== generation) return json({ ok: true, note: "connection changed or disconnected" });
 
   // Every event in the batch is dispatched independently. One event that throws must never block
   // the others: this is the push path, and blocking it is exactly what turns a single bad event

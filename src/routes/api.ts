@@ -1,3 +1,4 @@
+import { connectionGeneration } from "../connection";
 // JSON API for the FadeLoop web UI (Section 7A). All routes here are owner-gated by the caller
 // (index.ts) via the owner session. The UI is a pure config editor + monitor over the same tables
 // the engine uses — no new funnel behavior.
@@ -49,7 +50,7 @@ export async function handleApi(env: Env, req: Request, url: URL): Promise<Respo
 
 async function statusResponse(env: Env): Promise<Response> {
   const auth = await getAuth(env.DB);
-  if (!auth) return json({ connected: false });
+  if (!auth) return json({ connected: false, connection_generation: await connectionGeneration(env.DB) });
   // Poll health belongs HERE, not only on /auth/status: this is the endpoint the dashboard calls.
   // The signal added after the 2026-08-09 stall went onto /auth/status, which nothing in the UI
   // ever requests — so the one thing built to make a frozen poller visible was itself invisible.
@@ -58,6 +59,7 @@ async function statusResponse(env: Env): Promise<Response> {
   const commentPollError = await getCommentPollError(env.DB);
   return json({
     connected: true,
+    connection_generation: auth.connection_generation,
     username: auth.username,
     account_type: auth.account_type,
     profile_picture_url: auth.profile_picture_url,

@@ -92,6 +92,7 @@ export class InstagramClient {
     private readonly version: string,
     /** The connected account's IG user id; message sends are POSTed to /{igUserId}/messages. */
     private readonly igUserId: string = "me",
+    private readonly beforeRequest: () => Promise<void> = async () => {},
   ) {}
 
   private base(path: string): string {
@@ -103,6 +104,7 @@ export class InstagramClient {
     const url = new URL(this.base(path));
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("access_token", this.accessToken);
+    await this.beforeRequest();
     const res = await fetch(url.toString(), { method: "GET" });
     return this.parse<T>(res);
   }
@@ -115,6 +117,7 @@ export class InstagramClient {
     const url = new URL(this.base(path));
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("access_token", this.accessToken);
+    await this.beforeRequest();
     const res = await fetch(url.toString(), { method: "POST" });
     return this.parse<T>(res);
   }
@@ -123,6 +126,7 @@ export class InstagramClient {
   private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
     const url = new URL(this.base(path));
     url.searchParams.set("access_token", this.accessToken);
+    await this.beforeRequest();
     const res = await fetch(url.toString(), {
       method: "POST",
       headers: { "content-type": "application/json" },

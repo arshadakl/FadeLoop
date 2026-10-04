@@ -1,3 +1,4 @@
+import { ConnectionChangedError } from "../connection";
 // Transport-agnostic funnel engine (Section 5, 6). Consumes normalized comment/message events
 // from EITHER the poller or the webhook route and advances each person's state machine. All
 // side-effects (DMs, public actions) run idempotently via the ledgers, so re-polls and webhook
@@ -558,6 +559,7 @@ export class Engine {
       // An InstagramApiError means we received an HTTP response — the request reached Instagram
       // and was refused, so nothing went out. Anything else (fetch threw, timeout, socket closed)
       // means we never learned the outcome, and the message may already be in the person's inbox.
+      if (e instanceof ConnectionChangedError) throw e;
       const rejected = e instanceof InstagramApiError;
       if (rejected) {
         if (claimKey) await releaseSend(this.db, claimKey);

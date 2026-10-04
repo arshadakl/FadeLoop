@@ -1,3 +1,5 @@
+import { ConnectionChangedError, connectionGeneration, guardedConnectionDb } from "./connection";
+import { disconnectInstagram } from "./auth/disconnect";
 // FadeLoop Worker entry point. `fetch` serves the dashboard, owner sessions and OAuth routes;
 // `scheduled` runs the existing polling crons and daily Instagram token refresh.
 
@@ -7,7 +9,7 @@ import { pollComments } from "./poller/commentPoll";
 import { pollMessages } from "./poller/messagePoll";
 import { refreshTokenIfDue } from "./auth/refresh";
 import { claimPollSlot } from "./db";
-import { handleAuthorize, handleCallback, handleDisconnect, handleStatus } from "./routes/auth";
+import { handleAuthorize, handleCallback, handleStatus } from "./routes/auth";
 import { handleConfigExport, handleConfigImport } from "./routes/config";
 import { handleWebhookAdmin, handleWebhookEvent, handleWebhookVerify } from "./routes/webhook";
 import { handleApi } from "./routes/api";
@@ -19,7 +21,11 @@ const REFRESH_CRON = "0 3 * * *";
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const result = await routeRequest(req, env);
+    let result: Response;
+    try { result = await routeRequest(req, env); } catch (error) {
+      if (!(error instanceof ConnectionChangedError)) throw error;
+      result = json({ error: error.message }, 409);
+    }
     // Asset fetch responses have immutable headers in workerd.
     const response = new Response(result.body, result);
     const path = new URL(req.url).pathname;
@@ -64,7 +70,8 @@ async function routeRequest(req: Request, env: Env): Promise<Response> {
     if (pathname.startsWith("/api/")) {
       if (!await getSession(req, env.DB)) return json({ error: "unauthorized" }, 401);
       if (!["GET", "HEAD"].includes(method) && !sameOrigin(req)) return json({ error: "Forbidden origin" }, 403);
-      return handleApi(env, req, url);
+      const scoped = ["GET", "HEAD"].includes(method) ? env : { ...env, DB: guardedConnectionDb(env.DB, await connectionGeneration(env.DB)) };
+      return handleApi(scoped, req, url);
     }
     const ownerRoutes = new Set([
       "/auth/authorize",
@@ -81,8 +88,8 @@ async function routeRequest(req: Request, env: Env): Promise<Response> {
       if ((!["GET", "HEAD"].includes(method) || pathname === "/auth/authorize") && !sameOrigin(req, pathname === "/auth/authorize")) return json({ error: "Forbidden origin" }, 403);
       if (pathname === "/auth/authorize" && method === "GET") return handleAuthorize(env, session);
       if (pathname === "/auth/status" && method === "GET") return handleStatus(env);
-      if (pathname === "/auth/disconnect" && method === "POST") return handleDisconnect(env);
-      if (pathname === "/config/import" && method === "POST") return handleConfigImport(env, req);
+      if (pathname === "/auth/disconnect" && method === "POST") return disconnectInstagram(req, env);
+      if (pathname === "/config/import" && method === "POST") return handleConfigImport({ ...env, DB: guardedConnectionDb(env.DB, await connectionGeneration(env.DB)) }, req);
       if (pathname === "/config/export" && method === "GET") return handleConfigExport(env);
       // Manual poll trigger for testing without waiting for cron.
       if (pathname === "/admin/poll" && method === "POST") {
@@ -114,21 +121,22 @@ async function routeRequest(req: Request, env: Env): Promise<Response> {
  * /admin/poll call racing the cron from both polling at once and double-sending a real DM.
  */
 async function runPoll(env: Env, interval: number): Promise<void> {
-  const claimed = await claimPollSlot(env.DB, interval);
-  if (!claimed) return; // not due yet, or another invocation already claimed this slot
-
   const rt = await buildRuntime(env);
   if (!rt) return;
+  try { if (!await claimPollSlot(rt.db, interval)) return; } catch (e) {
+    if (e instanceof ConnectionChangedError) return;
+    throw e;
+  }
 
   // Isolated so one poll can never starve the other. pollComments used to run first with no
   // guard, which meant a throw there silently skipped the message poll for that whole tick.
   try {
-    await pollComments(rt, env.DB);
+    await pollComments(rt, rt.db);
   } catch (e) {
     console.warn(`[FadeLoop] pollComments failed: ${e instanceof Error ? e.message : e}`);
   }
   try {
-    await pollMessages(rt, env.DB);
+    await pollMessages(rt, rt.db);
   } catch (e) {
     console.warn(`[FadeLoop] pollMessages failed: ${e instanceof Error ? e.message : e}`);
   }

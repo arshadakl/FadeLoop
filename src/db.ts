@@ -461,7 +461,7 @@ export async function listConversations(
 // ---- auth ----
 
 export async function getAuth(db: D1Database): Promise<AuthRow | null> {
-  return await db.prepare("SELECT * FROM auth WHERE id = 1").first<AuthRow>();
+  return await db.prepare("SELECT auth.*, c.generation AS connection_generation FROM auth JOIN instagram_connection_state c ON c.id = auth.id WHERE auth.id = 1").first<AuthRow>();
 }
 
 export async function saveAuth(
@@ -474,8 +474,9 @@ export async function saveAuth(
     account_type?: string | null;
     profile_picture_url?: string | null;
   },
+  replacement?: { generation: number; sessionHash: string; credentialVersion: number },
 ): Promise<void> {
-  await db
+  const statement = db
     .prepare(
       `INSERT INTO auth (id, access_token, ig_user_id, username, account_type, profile_picture_url, expires_at, refreshed_at)
        VALUES (1, ?, ?, ?, ?, ?, ?, ?)
@@ -496,8 +497,17 @@ export async function saveAuth(
       fields.profile_picture_url ?? null,
       fields.expires_at,
       now(),
-    )
-    .run();
+    );
+  if (replacement) {
+    await db.batch([
+      db.prepare(`UPDATE instagram_connection_state SET generation = CASE WHEN generation = ?
+        AND EXISTS (SELECT 1 FROM owner_sessions s JOIN owner_accounts a ON a.id = s.owner_id
+          AND a.credential_version = s.credential_version WHERE s.token_hash = ? AND s.credential_version = ? AND s.expires_at > ?)
+        THEN generation + 1 ELSE -1 END WHERE id = 1`)
+        .bind(replacement.generation, replacement.sessionHash, replacement.credentialVersion, now()),
+      statement,
+    ]);
+  } else await statement.run();
 }
 
 export async function clearAuth(db: D1Database): Promise<void> {

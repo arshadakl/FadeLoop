@@ -39,6 +39,7 @@ try {
   cookie = changed.headers.get('set-cookie').split(';')[0];
   assert.equal((await mf.dispatchFetch('https://fadeloop.test/session', { headers: { cookie: oldCookie } })).status, 401);
   assert.equal((await mf.dispatchFetch('https://fadeloop.test/session', { headers: { cookie } })).status, 200);
+  await db.prepare("INSERT INTO auth (id,access_token,ig_user_id,expires_at) VALUES (1,'fixture','fixture-account',9999999999)").run();
   const folder = await mf.dispatchFetch('https://fadeloop.test/api/folders', { method: 'POST', headers: { cookie, origin: 'https://fadeloop.test', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Runtime folder' }) });
   const folderBody = await folder.json();
   assert.equal(folder.status, 200, JSON.stringify(folderBody));
@@ -53,6 +54,22 @@ try {
     const membership = await db.prepare('SELECT folder_id FROM campaign_folders WHERE campaign_id = ?').bind(config.campaign_id).first();
     assert.equal(membership?.folder_id ?? null, folder_id);
   }
+  const disconnectRequest = password => mf.dispatchFetch('https://fadeloop.test/auth/disconnect', { method: 'POST', headers: { cookie, origin: 'https://fadeloop.test', 'content-type': 'application/json' }, body: JSON.stringify({ password, connection_generation: 0 }) });
+  assert.equal((await disconnectRequest('incorrect123')).status, 403);
+  // A real SQLite trigger failure proves workerd/D1 rolls back the generation and all deletes.
+  await db.prepare("CREATE TRIGGER reset_failure BEFORE DELETE ON auth BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END").run();
+  assert.equal((await disconnectRequest('runtime changed password')).status, 500);
+  assert.ok(await db.prepare('SELECT id FROM auth').first());
+  assert.ok(await db.prepare('SELECT campaign_id FROM campaigns').first());
+  assert.equal((await db.prepare('SELECT generation FROM instagram_connection_state').first()).generation, 0);
+  await db.prepare('DROP TRIGGER reset_failure').run();
+  const reset = await disconnectRequest('runtime changed password');
+  assert.equal(reset.status, 200, await reset.text());
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM campaigns').first()).n, 0);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM automation_folders').first()).n, 0);
+  assert.equal((await db.prepare('SELECT generation FROM instagram_connection_state').first()).generation, 1);
+  assert.equal((await mf.dispatchFetch('https://fadeloop.test/session', { headers: { cookie } })).status, 200);
+  assert.equal((await disconnectRequest('runtime changed password')).status, 200);
   assert.equal((await mf.dispatchFetch('https://fadeloop.test/api/folders')).status, 401);
   assert.equal((await mf.dispatchFetch('https://fadeloop.test/api/status?token=old', { headers: { authorization: 'Bearer old' } })).status, 401);
   assert.equal((await mf.dispatchFetch('https://fadeloop.test/session/logout', { method: 'POST', headers: { cookie, origin: 'https://attacker.test' } })).status, 403);
@@ -60,5 +77,5 @@ try {
   assert.equal((await mf.dispatchFetch('https://fadeloop.test/session', { headers: { cookie } })).status, 401);
   const html = await mf.dispatchFetch('https://fadeloop.test/');
   assert.match(await html.text(), /id="app"/);
-  console.log(`Workers runtime: login, password rotation, folders/campaign assignment, activation metadata, protected API, legacy rejection, CSRF and logout passed. Login wall times: ${durations.join(', ')} ms. Argon2 memory: 19 MiB plus runtime overhead. Local wall time is not deployed CPU usage; see docs/authentication.md for the measured Free-plan release limitation.`);
+  console.log(`Workers runtime: transactional disconnect/rollback/session retention, login, password rotation, folders/campaign assignment, activation metadata, protected API, legacy rejection, CSRF and logout passed. Login wall times: ${durations.join(', ')} ms. Argon2 memory: 19 MiB plus runtime overhead. Local wall time is not deployed CPU usage; see docs/authentication.md for the measured Free-plan release limitation.`);
 } finally { await mf.dispose(); }
