@@ -32,8 +32,8 @@ export function hasExcludedWord(text: string, exclude: string[] | undefined): bo
 }
 
 /** A comment triggers a campaign when a keyword matches AND no excluded word is present. */
-export function commentTriggers(text: string, keywords: string[], exclude?: string[]): boolean {
-  return matchesAnyKeyword(text, keywords) && !hasExcludedWord(text, exclude);
+export function commentTriggers(text: string, keywords: string[], exclude?: string[], mode: "keywords" | "any" = "keywords"): boolean {
+  return (mode === "any" ? text.trim().length > 0 : matchesAnyKeyword(text, keywords)) && !hasExcludedWord(text, exclude);
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

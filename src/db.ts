@@ -15,6 +15,14 @@ export interface StoredCampaign {
   active: boolean;
 }
 
+async function attachActivation(db: D1Database, campaigns: Campaign[]): Promise<void> {
+  const any = campaigns.filter(c => c.match_mode === "any");
+  if (!any.length) return;
+  const rows = await db.prepare("SELECT campaign_id, activated_at FROM campaign_trigger_activation").all<{ campaign_id: string; activated_at: number }>();
+  const dates = new Map(rows.results.map(r => [r.campaign_id, r.activated_at]));
+  for (const c of any) c.activated_at = dates.get(c.campaign_id);
+}
+
 /** Active campaigns only (Section 10: poll only active campaigns to conserve rate budget). An
  * archived campaign is never polled even if its `active` flag is still on. */
 export async function getActiveCampaigns(db: D1Database): Promise<Campaign[]> {
@@ -29,6 +37,7 @@ export async function getActiveCampaigns(db: D1Database): Promise<Campaign[]> {
       // Skip malformed rows rather than aborting the whole poll.
     }
   }
+  await attachActivation(db, out);
   return out;
 }
 
@@ -39,7 +48,9 @@ export async function getCampaign(db: D1Database, campaignId: string): Promise<C
     .first<{ config_json: string }>();
   if (!row) return null;
   try {
-    return validateCampaign(JSON.parse(row.config_json));
+    const campaign = validateCampaign(JSON.parse(row.config_json));
+    await attachActivation(db, [campaign]);
+    return campaign;
   } catch {
     return null;
   }
@@ -50,6 +61,7 @@ export interface CampaignListItem {
   active: boolean;
   archived: boolean;
   updated_at: number;
+  folder_id: string | null;
 }
 
 /**
@@ -60,8 +72,8 @@ export interface CampaignListItem {
 export async function getAllCampaigns(db: D1Database, opts: { archived?: boolean } = {}): Promise<CampaignListItem[]> {
   const where = opts.archived ? "archived_at IS NOT NULL" : "archived_at IS NULL";
   const rows = await db
-    .prepare(`SELECT config_json, active, updated_at, archived_at FROM campaigns WHERE ${where} ORDER BY updated_at DESC`)
-    .all<{ config_json: string; active: number; updated_at: number; archived_at: number | null }>();
+    .prepare(`SELECT config_json, active, updated_at, archived_at, f.folder_id FROM campaigns LEFT JOIN campaign_folders f USING(campaign_id) WHERE ${where} ORDER BY updated_at DESC`)
+    .all<{ config_json: string; active: number; updated_at: number; archived_at: number | null; folder_id: string | null }>();
   const out: CampaignListItem[] = [];
   for (const r of rows.results ?? []) {
     try {
@@ -70,6 +82,7 @@ export async function getAllCampaigns(db: D1Database, opts: { archived?: boolean
         active: r.active === 1,
         archived: r.archived_at != null,
         updated_at: r.updated_at,
+        folder_id: r.folder_id,
       });
     } catch {
       // skip malformed
@@ -79,15 +92,32 @@ export async function getAllCampaigns(db: D1Database, opts: { archived?: boolean
 }
 
 export async function setCampaignActive(db: D1Database, campaignId: string, active: boolean): Promise<void> {
-  await db
+  const statements: D1PreparedStatement[] = [];
+  const campaign = await getCampaign(db, campaignId);
+  if (active && campaign?.match_mode === "any") {
+    statements.push(db.prepare(`INSERT INTO campaign_trigger_activation (campaign_id, activated_at) SELECT campaign_id, ? FROM campaigns WHERE campaign_id = ?
+      ON CONFLICT(campaign_id) DO UPDATE SET activated_at = excluded.activated_at WHERE (SELECT active FROM campaigns WHERE campaign_id = ?) = 0`).bind(now(), campaignId, campaignId));
+  }
+  statements.push(db
     .prepare("UPDATE campaigns SET active = ?, updated_at = ? WHERE campaign_id = ?")
     .bind(active ? 1 : 0, now(), campaignId)
-    .run();
+    );
+  await db.batch(statements);
 }
 
 /** Archive (soft-delete) or restore a campaign. Archiving keeps all its history intact — unlike
  * deleteCampaign, which is permanent — but stops it from being polled (see getActiveCampaigns). */
 export async function setCampaignArchived(db: D1Database, campaignId: string, archived: boolean): Promise<void> {
+  if (!archived) {
+    const campaign = await getCampaign(db, campaignId);
+    if (campaign?.match_mode === "any") {
+      await db.batch([
+        db.prepare("UPDATE campaign_trigger_activation SET activated_at = ? WHERE campaign_id = ? AND EXISTS (SELECT 1 FROM campaigns WHERE campaign_id = ? AND archived_at IS NOT NULL AND active = 1)").bind(now(), campaignId, campaignId),
+        db.prepare("UPDATE campaigns SET archived_at = NULL, updated_at = ? WHERE campaign_id = ?").bind(now(), campaignId),
+      ]);
+      return;
+    }
+  }
   await db
     .prepare("UPDATE campaigns SET archived_at = ?, updated_at = ? WHERE campaign_id = ?")
     .bind(archived ? now() : null, now(), campaignId)
@@ -116,8 +146,15 @@ export async function deleteCampaign(db: D1Database, campaignId: string): Promis
   ]);
 }
 
-export async function upsertCampaign(db: D1Database, campaign: Campaign, active = true): Promise<void> {
-  await db
+export async function upsertCampaign(db: D1Database, campaign: Campaign, active = true, folderId?: string | null): Promise<void> {
+  const statements: D1PreparedStatement[] = [];
+  if (campaign.match_mode === "any" && active) {
+    statements.push(db.prepare(`UPDATE campaign_trigger_activation SET activated_at = ? WHERE campaign_id = ? AND EXISTS
+      (SELECT 1 FROM campaigns WHERE campaign_id = ? AND (active = 0 OR archived_at IS NOT NULL OR COALESCE(json_extract(config_json, '$.match_mode'), 'keywords') != 'any'))`).bind(now(), campaign.campaign_id, campaign.campaign_id));
+  }
+  // Never persist a caller-supplied eligibility boundary.
+  const { activated_at: _ignored, ...config } = campaign;
+  statements.push(db
     .prepare(
       `INSERT INTO campaigns (campaign_id, platform, media_id, config_json, active, updated_at)
        VALUES (?, 'instagram', ?, ?, ?, ?)
@@ -127,8 +164,11 @@ export async function upsertCampaign(db: D1Database, campaign: Campaign, active 
          active = excluded.active,
          updated_at = excluded.updated_at`,
     )
-    .bind(campaign.campaign_id, campaign.media_id, JSON.stringify(campaign), active ? 1 : 0, now())
-    .run();
+    .bind(campaign.campaign_id, campaign.media_id, JSON.stringify(config), active ? 1 : 0, now()));
+  if (campaign.match_mode === "any" && active) statements.push(db.prepare("INSERT OR IGNORE INTO campaign_trigger_activation (campaign_id, activated_at) VALUES (?, ?)").bind(campaign.campaign_id, now()));
+  if (folderId === null) statements.push(db.prepare("DELETE FROM campaign_folders WHERE campaign_id = ?").bind(campaign.campaign_id));
+  else if (folderId !== undefined) statements.push(db.prepare("INSERT INTO campaign_folders (campaign_id, folder_id) VALUES (?, ?) ON CONFLICT(campaign_id) DO UPDATE SET folder_id = excluded.folder_id").bind(campaign.campaign_id, folderId));
+  await db.batch(statements);
 }
 
 // ---- idempotency ledgers ----

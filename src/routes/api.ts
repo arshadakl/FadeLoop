@@ -1,5 +1,5 @@
 // JSON API for the FadeLoop web UI (Section 7A). All routes here are owner-gated by the caller
-// (index.ts) via the OWNER_TOKEN. The UI is a pure config editor + monitor over the same tables
+// (index.ts) via the owner session. The UI is a pure config editor + monitor over the same tables
 // the engine uses — no new funnel behavior.
 
 import { validateCampaign } from "../config";
@@ -19,10 +19,12 @@ import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
 import { getCommentPollError } from "../poller/commentPoll";
 import type { Env } from "../types";
 import { json } from "./http";
+import { folders, validFolder } from "./folders";
 
 export async function handleApi(env: Env, req: Request, url: URL): Promise<Response> {
   const path = url.pathname;
   const method = req.method.toUpperCase();
+  if (path === "/api/folders" || path.startsWith("/api/folders/")) return folders(env, req, path);
 
   // Connection status + connected profile (drives the preview + settings screen).
   if (path === "/api/status" && method === "GET") return statusResponse(env);
@@ -87,7 +89,7 @@ async function campaignsList(env: Env, url: URL): Promise<Response> {
   const archived = url.searchParams.get("archived") === "1";
   const items = await getAllCampaigns(env.DB, { archived });
   return json({
-    campaigns: items.map((i) => ({ ...i.campaign, active: i.active, archived: i.archived, updated_at: i.updated_at })),
+    campaigns: items.map((i) => ({ ...i.campaign, active: i.active, archived: i.archived, updated_at: i.updated_at, folder_id: i.folder_id })),
   });
 }
 
@@ -98,14 +100,15 @@ async function campaignSave(env: Env, req: Request): Promise<Response> {
   } catch {
     return json({ error: "invalid JSON" }, 400);
   }
-  const payload = body as { campaign?: unknown; active?: boolean };
+  const payload = body as { campaign?: unknown; active?: boolean; folder_id?: unknown };
+  if (payload.folder_id !== undefined && !await validFolder(env.DB, payload.folder_id)) return json({ error: "Folder not found" }, 404);
   let campaign;
   try {
     campaign = validateCampaign(payload.campaign);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 400);
   }
-  await upsertCampaign(env.DB, campaign, payload.active ?? true);
+  await upsertCampaign(env.DB, campaign, payload.active ?? true, payload.folder_id as string | null | undefined);
   return json({ ok: true, campaign_id: campaign.campaign_id });
 }
 

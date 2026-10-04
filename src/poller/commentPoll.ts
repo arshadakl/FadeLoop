@@ -56,7 +56,7 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
         username: c.from?.username ?? c.username,
         text: c.text ?? "",
         media_id: mediaId,
-        timestamp: toUnixSeconds(c.timestamp),
+        timestamp: c.timestamp && Number.isFinite(Date.parse(c.timestamp)) ? toUnixSeconds(c.timestamp) : 0,
       };
       // Pass the campaigns we already fetched so the engine doesn't re-query per comment.
       // Isolated per comment, for the same reason pollMessages isolates per message: handleComment

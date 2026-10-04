@@ -24,7 +24,10 @@ export function validateCampaign(input: unknown, index = 0): Campaign {
   if (!isNonEmptyString(c.media_id)) {
     throw new ConfigError(`${where}.media_id is required`);
   }
-  if (!Array.isArray(c.keywords) || c.keywords.length === 0 || !c.keywords.every(isNonEmptyString)) {
+  if (c.match_mode !== undefined && c.match_mode !== "keywords" && c.match_mode !== "any") {
+    throw new ConfigError(`${where}.match_mode must be keywords or any`);
+  }
+  if (!Array.isArray(c.keywords) || (c.match_mode !== "any" && c.keywords.length === 0) || !c.keywords.every(isNonEmptyString)) {
     throw new ConfigError(`${where}.keywords must be a non-empty array of strings`);
   }
   if (c.exclude !== undefined && (!Array.isArray(c.exclude) || !c.exclude.every(isNonEmptyString))) {
@@ -61,6 +64,7 @@ export function validateCampaign(input: unknown, index = 0): Campaign {
     name: typeof c.name === "string" ? c.name : undefined,
     media_id: c.media_id,
     keywords: c.keywords as string[],
+    ...(c.match_mode !== undefined ? { match_mode: c.match_mode as "keywords" | "any" } : {}),
     exclude: (c.exclude as string[] | undefined) ?? [],
     public_reply: c.public_reply as Campaign["public_reply"],
     like_comment: Boolean(c.like_comment),

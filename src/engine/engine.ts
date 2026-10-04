@@ -149,7 +149,14 @@ export class Engine {
     let pendingRetry = false;
 
     for (const campaign of campaigns) {
-      if (!commentTriggers(evt.text, campaign.keywords, campaign.exclude)) continue;
+      if (campaign.match_mode === "any") {
+        if (!campaign.activated_at) continue;
+        // An undated webhook must not poison the global ledger: polling may later provide
+        // the actual creation time. It sends nothing until that eligibility can be established.
+        if (!Number.isFinite(evt.timestamp) || evt.timestamp <= 0) { pendingRetry = true; continue; }
+        if (evt.timestamp <= campaign.activated_at) continue;
+      }
+      if (!commentTriggers(evt.text, campaign.keywords, campaign.exclude, campaign.match_mode)) continue;
       matchedCampaignId = campaign.campaign_id;
 
       // Public actions are per-comment (independent toggles), guarded so re-polls don't repeat them.

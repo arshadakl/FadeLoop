@@ -142,7 +142,7 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
         username: v.from?.username,
         text: v.text ?? "",
         media_id: mediaId,
-        timestamp: toUnixSeconds(v.timestamp),
+        timestamp: v.timestamp && Number.isFinite(Date.parse(v.timestamp)) ? toUnixSeconds(v.timestamp) : 0,
       };
       await dispatch(`comment ${v.id}`, () => rt.engine.handleComment(evt));
     }
