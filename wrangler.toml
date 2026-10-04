@@ -26,7 +26,7 @@ crons = ["* * * * *", "0 3 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "fadeloop"
-database_id = "0f072a7e-34d6-4160-9d64-8bd84455327c"
+database_id = "675b380c-16fe-4166-8773-653257ed21fa"
 migrations_dir = "schema"
 
 # Web UI (Section 7A). Static files in ./public are served automatically; the Worker handles
