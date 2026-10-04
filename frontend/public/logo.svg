@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 354 354" role="img" aria-labelledby="title desc">
+  <title id="title">FadeLoop logo icon</title>
+  <desc id="desc">Four white curved shapes form an automation loop on a blue rounded square.</desc>
+  <rect width="354" height="354" rx="64" fill="#084BFF"/>
+  <defs><path id="loop-segment" d="M 177,28 C 164,19 147,22 138,34 C 129,46 132,63 144,72 L 185,102 C 199,112 205,120 210,133 C 216,149 235,157 255,156 L 255,110 C 255,88 245,72 226,59 Z"/></defs>
+  <g fill="#FFFFFF">
+    <use href="#loop-segment"/>
+    <use href="#loop-segment" transform="rotate(90 177 177)"/>
+    <use href="#loop-segment" transform="rotate(180 177 177)"/>
+    <use href="#loop-segment" transform="rotate(270 177 177)"/>
+  </g>
+</svg>

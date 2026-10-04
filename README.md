@@ -2,9 +2,9 @@
 
 Self-hosted Instagram **comment-to-DM** automation, using the **official Meta Instagram API only** — no scraping, no unofficial access. When someone comments a keyword on your post or reel, FadeLoop DMs them, optionally asks them to follow, optionally captures their email, then delivers a link or reward.
 
-You clone this repo, create your own Meta app, connect your own Instagram account, and deploy your own instance on Cloudflare's free tier. **The author hosts nothing and stores none of your data.** Free ($0/month) at single-creator scale.
+You clone this repo, create your own Meta app, connect your own Instagram account, and deploy your own instance on Cloudflare. **The author hosts nothing and stores none of your data.** Email/password authentication requires verification against your Cloudflare CPU limits; see [authentication setup](docs/authentication.md).
 
-> **Status:** feature-complete for single-creator use — the automation engine (OAuth, polling, token refresh, rate limiting, analytics events) **plus a ManyChat-style web UI** to build and monitor campaigns without editing JSON.
+> **Status:** feature-complete for single-creator use — the automation engine (OAuth, polling, token refresh, rate limiting, analytics events) **plus a mobile-responsive workspace with light and dark themes** to build and monitor campaigns without editing JSON.
 
 ---
 
@@ -94,7 +94,7 @@ You'll collect **five values** into that note as you go, and later steps refer t
 | `INSTAGRAM APP ID` | step 1.6 |
 | `INSTAGRAM APP SECRET` | step 1.6 |
 | `DATABASE ID` | step 2.4 |
-| `OWNER TOKEN` | step 2.7 (you invent this one) |
+| Owner email and password | step 2.7 (stored as a hash in D1) |
 | `VERIFY TOKEN` | step 2.7 (you invent this one too) |
 | `MY ADDRESS` | step 2.8 |
 
@@ -324,7 +324,7 @@ When it asks `Your database may not be available to serve requests during the mi
 
 You should see a small table with ✅ next to each migration.
 
-#### 2.7 — Set your four secret values
+#### 2.7 — Set your Meta secrets and dashboard account
 
 Run these **one at a time**. After each, the terminal waits for you to paste a value and press **Enter**.
 
@@ -351,15 +351,13 @@ npx wrangler secret put APP_SECRET
 ```
 Paste your **`INSTAGRAM APP SECRET`** from step 1.6.
 
+Create the dashboard owner after applying migrations:
+
 ```bash
-npx wrangler secret put OWNER_TOKEN
+npm run owner:create -- --remote
 ```
 
-This one you **make up yourself** — nothing to copy. It's the password for your own FadeLoop dashboard.
-
-**Make it at least 20 characters.** This single value is the only thing protecting your contacts, emails, and campaigns from anyone who finds your web address. Mash your keyboard, or use `xk29fJ3mQpz81LwT4nBv`.
-
-**Write it in your note as `OWNER TOKEN` before pressing Enter** — you cannot read it back later.
+Enter your email and a password of 8 to 128 characters. Password entry is invisible. For local development use `--local`. Recovery: `npm run owner:reset -- --remote` with the existing email; this revokes all sessions. If the remote database has no owner, run `npm run owner:create -- --remote` first; local accounts are separate from remote accounts. See [authentication setup and release requirements](docs/authentication.md).
 
 ```bash
 npx wrangler secret put WEBHOOK_VERIFY_TOKEN
@@ -370,6 +368,8 @@ Another one you **make up yourself**. Meta echoes this back to prove your web ad
 Any long random string is fine — mash the keyboard again. **Write it in your note as `VERIFY TOKEN`**; you'll paste the exact same value into Meta shortly.
 
 > Got one wrong? Just run the same command again with a new value. It overwrites instantly.
+
+Before deploying this authentication version, complete the target-plan CPU verification in [authentication setup](docs/authentication.md). Do not assume Argon2 fits the Workers Free CPU limit.
 
 #### 2.8 — Put it online
 
@@ -512,7 +512,7 @@ At the top of the dashboard, find the toggle that says **Development** and switc
 
 Open a browser tab logged into the Instagram account you added as a tester in step 1.7.
 
-Go to **`MY ADDRESS` + `/auth/authorize`** — for example `https://fadeloop.abc123.workers.dev/auth/authorize`.
+Open **`MY ADDRESS`**, sign in with your owner email and password, then click **Connect Instagram** inside the dashboard. Start the connection there so it is bound to your signed-in session.
 
 Instagram shows its own permission screen. Click **Allow**.
 
@@ -521,7 +521,7 @@ Instagram shows its own permission screen. Click **Allow**.
 You'll bounce back to your own site. That's it — you're connected. The token lasts 60 days and renews itself daily, automatically.
 
 > ### ✅ Confirm it worked:
-> Go to **`MY ADDRESS` + `/`**, sign in with your `OWNER TOKEN`, and check that your Instagram username and profile picture appear.
+> Go to **`MY ADDRESS` + `/`**, sign in with your owner email and password, and check that your Instagram username and profile picture appear.
 
 ---
 
@@ -539,7 +539,7 @@ Two possible causes.
 Check what your site is actually sending. Paste this into your terminal, replacing the address with yours:
 
 ```bash
-curl -s -o /dev/null -D - https://fadeloop.abc123.workers.dev/auth/authorize | grep -i location
+curl -s -b .fadeloop-cookies -H "Origin: https://fadeloop.abc123.workers.dev" -o /dev/null -D - https://fadeloop.abc123.workers.dev/auth/authorize | grep -i location
 ```
 
 Read the `client_id=` number in the output. Now compare it to the **Instagram app ID** at *Use cases → Customize → API setup with Instagram login*.
@@ -610,7 +610,7 @@ Note the Worker itself still deploys successfully when this happens, so it looks
 
 ### Part 5 — Build your first campaign
 
-Open **`MY ADDRESS`** in your browser and sign in with the `OWNER TOKEN` from your note. You get the **FadeLoop web UI**:
+Open **`MY ADDRESS`** in your browser and sign in with your owner email and password. You get the **FadeLoop web UI**:
 
 - **Automations** — every campaign as a row: status, keyword, runs, CTR. Bulk-select to **Archive** (pause without losing history) or **Delete** (permanent, cascades everywhere).
 - **Create** — a visual builder: pick the post/reel, set keywords (whole-word), toggle the public reply / follow-gate / email steps, and write your copy. A live Instagram phone preview (driven by your own avatar, handle, and selected post) shows exactly what followers see across Post / Comments / DM. Hit **Go live**.
@@ -620,11 +620,11 @@ Open **`MY ADDRESS`** in your browser and sign in with the `OWNER TOKEN` from yo
 
 **Prefer JSON?** Entirely optional — the builder above does the same thing.
 
-Make a copy of `config.example.json` named `config.json`, set your `media_id` and keywords in it, then import it. Replace **both** placeholders below with your own values — the address with `MY ADDRESS`, and `YOUR_OWNER_TOKEN` with the `OWNER TOKEN` from your note:
+Make a copy of `config.example.json` named `config.json`, set your `media_id` and keywords in it, then import it. First run `npm run session:login -- https://fadeloop.abc123.workers.dev` to create a cookie jar. Replace the example address with `MY ADDRESS` in every command:
 
 ```bash
 curl -X POST https://fadeloop.abc123.workers.dev/config/import \
-  -H "Authorization: Bearer YOUR_OWNER_TOKEN" \
+  -b .fadeloop-cookies -H "Origin: https://fadeloop.abc123.workers.dev" \
   -H "content-type: application/json" \
   --data @config.json
 ```
@@ -647,17 +647,17 @@ subscribed, and those are two different things. This is the single most common r
 "the webhook verified fine but nothing ever arrives".
 
 FadeLoop subscribes your account automatically every time you connect Instagram, so Part 4 normally
-handles it. To confirm:
+handles it. Before using the terminal examples, run `npm run session:login -- https://fadeloop.abc123.workers.dev` to create a cookie jar, replacing the address with yours. To confirm:
 
 ```bash
-curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://fadeloop.abc123.workers.dev/admin/webhook
+curl -s -b .fadeloop-cookies -H "Origin: https://fadeloop.abc123.workers.dev" https://fadeloop.abc123.workers.dev/admin/webhook
 ```
 
 Look for `"subscribed": true`. If it says `false` — most likely because you connected Instagram
 before doing step 3.5 — subscribe it now:
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://fadeloop.abc123.workers.dev/admin/webhook
+curl -s -X POST -b .fadeloop-cookies -H "Origin: https://fadeloop.abc123.workers.dev" https://fadeloop.abc123.workers.dev/admin/webhook
 ```
 
 Disconnecting and reconnecting from the dashboard does the same thing.
@@ -827,7 +827,7 @@ Should print `{"ok":true,"mode":"polling"}` — use your own address.
 Then confirm push is still wired up, which also tells you whether delivery is instant:
 
 ```bash
-curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://fadeloop.abc123.workers.dev/admin/webhook
+curl -s -b .fadeloop-cookies -H "Origin: https://fadeloop.abc123.workers.dev" https://fadeloop.abc123.workers.dev/admin/webhook
 ```
 
 Want `"subscribed": true`. If it's `false`, or the whole thing 404s, see
@@ -869,17 +869,26 @@ to confirm. Five minutes, and DMs land in a second or two instead of up to sixty
 
 ## Cost
 
-$0/month at single-creator scale — Cloudflare Workers (100k req/day), D1 (100k writes/day), Cron Triggers, and the Meta API (rate-limited, not priced) are all free tier. Only a genuinely viral account would exceed free limits.
+Hosting cost depends on the Cloudflare plan that supports your authentication CPU usage and automation traffic. Argon2id login needs target-plan verification before deployment; this version does not promise $0/month. See [authentication setup](docs/authentication.md) and [Cloudflare limits](https://developers.cloudflare.com/workers/platform/limits/).
 
 ## Development
 
 ```bash
-npm run typecheck   # tsc --noEmit
+npm run typecheck   # Worker and React frontend TypeScript checks
 npm test            # vitest — keyword matching, state transitions, engine idempotency/retry, poll-race regression
 npm run dev         # wrangler dev (local Worker + D1)
+npm run dev:ui      # Vite hot reload; run alongside npm run dev
+npm run build:ui    # production static frontend -> dist/ui
+npm run test:ui     # disposable D1 + Playwright browser checks
 ```
 
 Local secrets go in a gitignored `.dev.vars` file (same keys as `.env.example`). Apply the schema locally with `npm run db:migrate:local`.
+
+The interface uses React, TypeScript, Vite, Tailwind CSS, and customized shadcn/ui components. `npm run dev` builds the frontend before starting Wrangler; open Vite's URL when using `dev:ui` for hot reload. Vite proxies API, session, and OAuth requests to Wrangler on port 8787. Deployment and dry-run commands rebuild the frontend automatically. Legal pages remain public static HTML, and Inter fonts are served locally.
+
+See [frontend development, verification, preview, and rollback](docs/frontend.md) for the complete workflow.
+
+See [folders and Any comment](docs/automation-settings.md) for organization, trigger eligibility, and migration 0007. Signed-in password changes are available from account settings; [authentication documentation](docs/authentication.md) records the measured Free-plan CPU limitation. This combined release must pass its target-plan CPU checks before production deployment.
 
 ## Project layout
 
@@ -895,7 +904,9 @@ src/
   poller/             comment + message polls
   queue/              rate-limit send queue (throttle + backoff)
   routes/             auth, api (UI), config import/export, webhook, http helpers
-public/               web UI (index.html, styles.css, app.js), plus /privacy, /terms, /data-deletion
+frontend/             React UI, shared components, themes, and static legal pages
+dist/ui/              compiled assets served by Wrangler (generated, gitignored)
+public/               preserved pre-migration interface, used for compatibility tests; not deployed
 schema/               D1 migrations
 ```
 
@@ -903,3 +914,7 @@ schema/               D1 migrations
 ## License
 
 MIT. Built clean-room from official Meta API documentation.
+
+### Email/password upgrade
+
+See [authentication setup, recovery, session CLI and release checklist](docs/authentication.md). Apply the additive D1 migration, provision the owner, and verify Argon2 against the target plan before deploying. The light/dark/system theme defaults to System. On mobile, Archive, account controls and legal links are under More.
