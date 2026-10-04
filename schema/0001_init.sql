@@ -1,4 +1,4 @@
--- chatmany D1 schema (SQLite). Applied with `wrangler d1 migrations apply chatmany`.
+-- FadeLoop D1 schema (SQLite). Applied with `wrangler d1 migrations apply fadeloop`.
 
 -- One row per person per campaign: their position in the funnel.
 CREATE TABLE IF NOT EXISTS conversations (

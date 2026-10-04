@@ -25,7 +25,7 @@ export async function refreshTokenIfDue(env: Env): Promise<RefreshResult> {
   if (auth.expires_at <= ts) {
     // Past its life — cannot refresh, owner must re-connect. Loud warning (Section 9).
     console.warn(
-      `[chatmany] access token EXPIRED at ${new Date(auth.expires_at * 1000).toISOString()}; owner must reconnect Instagram.`,
+      `[FadeLoop] access token EXPIRED at ${new Date(auth.expires_at * 1000).toISOString()}; owner must reconnect Instagram.`,
     );
     return { status: "expired" };
   }
@@ -45,11 +45,11 @@ export async function refreshTokenIfDue(env: Env): Promise<RefreshResult> {
     const { access_token, expires_in } = await refreshLongLivedToken(env.GRAPH_VERSION, auth.access_token);
     const expiresAt = now() + expires_in;
     await saveAuth(env.DB, { access_token, expires_at: expiresAt });
-    console.log(`[chatmany] token refreshed; new expiry ${new Date(expiresAt * 1000).toISOString()}`);
+    console.log(`[FadeLoop] token refreshed; new expiry ${new Date(expiresAt * 1000).toISOString()}`);
     return { status: "refreshed", expiresAt };
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    console.warn(`[chatmany] token refresh FAILED (${detail}); expiry ${new Date(auth.expires_at * 1000).toISOString()}`);
+    console.warn(`[FadeLoop] token refresh FAILED (${detail}); expiry ${new Date(auth.expires_at * 1000).toISOString()}`);
     return { status: "error", detail, expiresAt: auth.expires_at };
   }
 }

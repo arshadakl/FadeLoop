@@ -1,9 +1,16 @@
-/* chatmany web UI (Section 7A). Vanilla JS SPA served from the Worker. A single-owner token
+/* FadeLoop web UI (Section 7A). Vanilla JS SPA served from the Worker. A single-owner token
    (stored in localStorage) authorizes every /api call. The UI is a config editor + monitor over
    the same campaigns/events/conversations tables the engine uses — no new funnel behavior. */
 
-const TOKEN_KEY = "chatmany_token";
-const GH_URL = "https://github.com/";
+const TOKEN_KEY = "fadeloop_token";
+// Move existing sessions to the new brand's key without requiring another sign-in.
+const LEGACY_TOKEN_KEY = "chatmany_token";
+const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY);
+if (legacyToken) {
+  if (!localStorage.getItem(TOKEN_KEY)) localStorage.setItem(TOKEN_KEY, legacyToken);
+  localStorage.removeItem(LEGACY_TOKEN_KEY);
+}
+const GH_URL = "https://github.com/arshadakl/FadeLoop";
 
 const store = {
   token: localStorage.getItem(TOKEN_KEY) || "",
@@ -104,12 +111,12 @@ async function boot() {
 
 /* ---------------- login / connect ---------------- */
 function renderLogin(err) {
-  document.title = "chatmany — sign in";
+  document.title = "FadeLoop — sign in";
   const app = $("#app");
   app.innerHTML = "";
   const card = el(`
     <div class="login-wrap"><div class="login-card">
-      <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">chatmany</span></div>
+      <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">FadeLoop</span></div>
       <h2>Owner sign in</h2>
       <p>Enter the owner token you set as the <code>OWNER_TOKEN</code> secret.</p>
       ${err ? `<div class="banner">${esc(err)}</div>` : ""}
@@ -138,14 +145,14 @@ function renderLogin(err) {
 
 /* ---------------- app shell ---------------- */
 function renderApp() {
-  document.title = "chatmany";
+  document.title = "FadeLoop";
   const s = store.status || {};
   const app = $("#app");
   app.innerHTML = "";
   const layout = el(`
     <div class="layout">
       <aside class="sidebar">
-        <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">chatmany</span></div>
+        <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">FadeLoop</span></div>
         <nav class="nav">
           <button class="nav-item" data-page="automations">${ICON.automations}<span>Automations</span></button>
           <button class="nav-item" data-page="create">${ICON.create}<span>Create</span></button>
@@ -214,7 +221,7 @@ function renderConnectGate(view, what) {
       <h2>Connect Instagram first</h2>
       <p>${esc(what)} need a connected Instagram Professional account — there's nothing for an automation to watch or send until one is linked.</p>
       <a class="btn primary" href="${authorizeUrl()}">Connect Instagram</a>
-      <p class="gate-hint">You'll approve access on Instagram's own page. chatmany never sees your password.</p>
+      <p class="gate-hint">You'll approve access on Instagram's own page. FadeLoop never sees your password.</p>
     </div></div>`;
 }
 
@@ -1150,7 +1157,7 @@ async function renderContacts() {
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "chatmany-contacts.csv";
+      a.download = "fadeloop-contacts.csv";
       document.body.appendChild(a);
       a.click();
       a.remove();

@@ -5,7 +5,7 @@
 
 const GRAPH_HOST = "https://graph.instagram.com";
 
-/** Webhook fields chatmany consumes. `comments` drives the funnel entry; `messages` carries taps,
+/** Webhook fields FadeLoop consumes. `comments` drives the funnel entry; `messages` carries taps,
  *  postback payloads, and typed replies. Both are needed — subscribing to only one silently breaks
  *  half the funnel. */
 export const WEBHOOK_FIELDS = "comments,messages";

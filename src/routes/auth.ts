@@ -43,7 +43,7 @@ export async function handleCallback(env: Env, url: URL): Promise<Response> {
     // Diagnostic: Meta can silently grant fewer scopes than requested (e.g. a permission not yet
     // enabled for this app in the dashboard). Log what was actually granted vs. requested so a
     // "why can't I read comments" report can be root-caused without guessing.
-    console.log(`[chatmany] OAuth granted permissions: ${JSON.stringify(short.permissions ?? "none reported")}`);
+    console.log(`[FadeLoop] OAuth granted permissions: ${JSON.stringify(short.permissions ?? "none reported")}`);
     const long = await exchangeForLongLivedToken(env.GRAPH_VERSION, env.APP_SECRET, short.accessToken);
 
     // Fetch the profile to enforce the professional-account requirement + power the UI preview.
@@ -53,7 +53,7 @@ export async function handleCallback(env: Env, url: URL): Promise<Response> {
     if (accountType === "PERSONAL") {
       return html(
         `<h1>Personal accounts aren't supported</h1>
-         <p>chatmany needs an Instagram <b>Professional</b> (Creator or Business) account.</p>
+         <p>FadeLoop needs an Instagram <b>Professional</b> (Creator or Business) account.</p>
          <p>In the Instagram app: <b>Settings → Account type and tools → Switch to professional account</b>, then reconnect.</p>`,
         400,
       );
@@ -68,7 +68,7 @@ export async function handleCallback(env: Env, url: URL): Promise<Response> {
     if (existing && existing.ig_user_id && existing.ig_user_id !== incomingUserId) {
       return html(
         `<h1>Already connected</h1>
-         <p>This chatmany instance is already connected to <b>@${escapeHtml(existing.username ?? existing.ig_user_id)}</b>.</p>
+         <p>This FadeLoop instance is already connected to <b>@${escapeHtml(existing.username ?? existing.ig_user_id)}</b>.</p>
          <p>To connect a different account, open your dashboard and click <b>Disconnect</b> first.</p>`,
         409,
       );
@@ -104,7 +104,7 @@ export async function handleCallback(env: Env, url: URL): Promise<Response> {
         webhookNote = `<p>Subscribed this account to <code>${escapeHtml(WEBHOOK_FIELDS)}</code> webhooks. Events arrive instantly once the callback URL is set in your Meta app; polling keeps running underneath either way.</p>`;
       } catch (e) {
         const detail = escapeHtml(e instanceof Error ? e.message : String(e));
-        console.warn(`[chatmany] webhook subscribe failed: ${detail}`);
+        console.warn(`[FadeLoop] webhook subscribe failed: ${detail}`);
         webhookNote =
           `<p>⚠️ Connected, but subscribing this account to webhooks failed:</p><pre>${detail}</pre>` +
           `<p>Polling still works. To get instant delivery, retry with <code>POST /admin/webhook</code> using your owner token.</p>`;
@@ -113,7 +113,7 @@ export async function handleCallback(env: Env, url: URL): Promise<Response> {
 
     return html(
       `<h1>Connected ✅</h1>
-       <p>@${escapeHtml(me.username ?? "your account")} is now connected to chatmany.</p>
+       <p>@${escapeHtml(me.username ?? "your account")} is now connected to FadeLoop.</p>
        <p>Token valid ~60 days; it auto-refreshes. You can close this tab.</p>
        ${webhookNote}`,
     );

@@ -3,7 +3,7 @@
 // "Connect Instagram" button sends the owner to Instagram's authorize page; the callback
 // exchanges the returned code for a short-lived token, then a long-lived (~60 day) token.
 //
-// chatmany never sees the user's Instagram password — approval happens on Instagram's page.
+// FadeLoop never sees the user's Instagram password — approval happens on Instagram's page.
 
 import { InstagramApiError } from "../api/client";
 

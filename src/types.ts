@@ -1,4 +1,4 @@
-// Shared types for chatmany.
+// Shared types for FadeLoop.
 
 /** Cloudflare bindings + vars available on the Worker environment. */
 export interface Env {

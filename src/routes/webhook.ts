@@ -123,7 +123,7 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
       await run();
     } catch (e) {
       failed++;
-      console.warn(`[chatmany] webhook ${label} failed: ${e instanceof Error ? e.message : e}`);
+      console.warn(`[FadeLoop] webhook ${label} failed: ${e instanceof Error ? e.message : e}`);
     }
   };
 

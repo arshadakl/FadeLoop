@@ -1,4 +1,4 @@
-// JSON API for the chatmany web UI (Section 7A). All routes here are owner-gated by the caller
+// JSON API for the FadeLoop web UI (Section 7A). All routes here are owner-gated by the caller
 // (index.ts) via the OWNER_TOKEN. The UI is a pure config editor + monitor over the same tables
 // the engine uses — no new funnel behavior.
 
@@ -208,7 +208,7 @@ async function contactsCsv(env: Env, url: URL): Promise<Response> {
   return new Response(lines.join("\n"), {
     headers: {
       "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename="chatmany-contacts.csv"`,
+      "content-disposition": `attachment; filename="fadeloop-contacts.csv"`,
     },
   });
 }
