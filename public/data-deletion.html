@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Data Deletion — chatmany</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%232d7ff9' d='M13 2 3 14h7l-1 8 10-12h-7z'/%3E%3C/svg%3E"
+    />
+    <style>
+      .doc { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }
+      .doc h1 { font-size: 26px; margin-bottom: 4px; }
+      .doc .meta { color: var(--ink-soft); font-size: 13px; margin-bottom: 32px; }
+      .doc h2 { font-size: 17px; margin-top: 34px; margin-bottom: 10px; }
+      .doc p, .doc li { color: var(--ink-soft); font-size: 14.5px; line-height: 1.65; }
+      .doc ol, .doc ul { padding-left: 20px; }
+      .doc code { background: var(--blue-soft); color: var(--blue-dark); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+      .back { display: inline-block; margin-bottom: 20px; font-size: 13px; }
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin: 18px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="doc">
+      <a class="back" href="/">← chatmany</a>
+      <h1>Data Deletion Instructions</h1>
+      <p class="meta">Last updated: August 2026</p>
+
+      <p>
+        chatmany is self-hosted — each instance is run independently by the Instagram account it's
+        connected to. There's no central chatmany company holding your data; whatever this instance
+        has stored about you lives only in its owner's own database.
+      </p>
+
+      <h2>If you commented or messaged an account running chatmany</h2>
+      <p>To have your data removed:</p>
+      <ol>
+        <li>Message the connected Instagram account directly and ask the owner to delete your data, or</li>
+        <li>Use Instagram's own <b>Settings → Apps and Websites → Tester Invites / Active Apps</b> to
+          revoke chatmany's access to your account, if you were ever added as a tester or connected
+          your own account to the app.</li>
+      </ol>
+      <p>
+        The owner can remove a person's record — their conversation state, comment text, follow
+        status, and email if captured — from the database on request. This deletes:
+      </p>
+      <div class="card">
+        <ul>
+          <li>Their conversation/funnel state for that campaign</li>
+          <li>Any captured email address</li>
+          <li>Their entries in the comment-processing ledger</li>
+        </ul>
+      </div>
+      <p>
+        Aggregate, de-identified event counts used for the dashboard (e.g. "12 comments this month")
+        may remain, since they no longer reference a specific person once the underlying record is
+        removed.
+      </p>
+
+      <h2>If you're the account owner</h2>
+      <p>
+        Disconnecting Instagram from the <b>Automations</b> app immediately stops all further
+        processing. To remove a specific person's data, delete their row from the
+        <code>conversations</code> table (and <code>processed_comments</code> if you want it fully
+        forgotten) in your instance's D1 database.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        For a specific chatmany instance, contact goes to whichever Instagram account it's connected
+        to — that's the data owner and controller for this deployment.
+      </p>
+    </div>
+  </body>
+</html>
