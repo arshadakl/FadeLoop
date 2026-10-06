@@ -296,6 +296,16 @@ function Workspace({
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaRevision, setMediaRevision] = useState(0);
   useEffect(() => {
+    // Back from Instagram can restore the pre-connection dashboard from bfcache.
+    const restored = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      setRevision(value => value + 1);
+      setMediaRevision(value => value + 1);
+    };
+    window.addEventListener("pageshow", restored);
+    return () => window.removeEventListener("pageshow", restored);
+  }, []);
+  useEffect(() => {
     if (!status.data?.connected || status.data.token_expired) return;
     const controller = new AbortController();
     setMediaLoading(true);

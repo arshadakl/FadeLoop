@@ -118,10 +118,15 @@ export async function handleCallback(env: Env, url: URL, req: Request): Promise<
     }
 
     return html(
-      `<h1>Connected ✅</h1>
-       <p>@${escapeHtml(me.username ?? "your account")} is now connected to FadeLoop.</p>
-       <p>Your connection refreshes automatically. <a href="/">Return to FadeLoop</a>.</p>
-       ${webhookNote}`,
+      `<div class="connection-brand"><img src="/logo.svg" alt="" width="28" height="28">FadeLoop</div>
+       <div class="connection-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 4 4 10-10"/></svg></div>
+       <p class="connection-eyebrow">YOU'RE ALL SET</p>
+       <h1>Instagram connected</h1>
+       <p class="connection-intro"><strong>${escapeHtml(me.username ? `@${me.username}` : "Your Instagram account")}</strong> is now connected to FadeLoop.</p>
+       <p class="connection-description">Your connection refreshes automatically. Head home to start managing your automations.</p>
+       <a class="connection-home" href="/">Go to home <span aria-hidden="true">&rarr;</span></a>
+       <p class="connection-hint">Your connected account will be ready when you arrive.</p>
+       <details class="connection-details"><summary>Connection details</summary>${webhookNote}</details>`,
     );
   } catch (e) {
     if (!await getSession(req, env.DB)) return html("<h1>Connection expired</h1><p>Sign in to FadeLoop and connect Instagram again.</p>", 400);
