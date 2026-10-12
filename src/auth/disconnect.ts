@@ -43,7 +43,8 @@ export async function disconnectInstagram(req: Request, env: Env): Promise<Respo
           AND a.credential_version = s.credential_version WHERE s.token_hash = ? AND s.credential_version = ?
           AND s.expires_at > CAST(strftime('%s', 'now') AS INTEGER))
         THEN generation + 1 ELSE -1 END WHERE id = 1`).bind(generation, session.token_hash, session.credential_version),
-      ...["campaign_folders", "campaign_trigger_activation", "conversations", "events", "processed_comments", "comment_actions", "send_claims", "campaigns", "automation_folders", "owner_oauth_states", "kv", "auth"].map(table => env.DB.prepare(`DELETE FROM ${table}`)),
+      ...["campaign_folders", "campaign_trigger_activation", "conversations", "events", "processed_comments", "comment_actions", "send_claims", "outbound_jobs", "inbound_events", "send_attempts", "polling_checkpoints", "automation_audit", "campaign_conflicts", "legacy_campaign_instances", "campaigns", "automation_folders", "owner_oauth_states", "kv", "auth"].map(table => env.DB.prepare(`DELETE FROM ${table}`)),
+      env.DB.prepare("UPDATE automation_control SET enabled=0,hold_reason=NULL,cutover_at=? WHERE id=1").bind(current),
     ]);
   } catch {
     if (!await getSession(req, env.DB)) return json({ error: "Your session has expired. Please sign in again." }, 401);

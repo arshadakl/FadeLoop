@@ -4,8 +4,13 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { argon2id } from 'hash-wasm';
+import { pbkdf2Sync } from 'node:crypto';
 import { ownerSql } from './owner-sql.mjs';
+
+function hashPasswordPbkdf2(password, salt = randomBytes(16)) {
+  const hash = pbkdf2Sync(password, salt, 100_000, 32, 'sha256');
+  return `pbkdf2$100000$${salt.toString('hex')}$${hash.toString('hex')}`;
+}
 
 const [action, target] = process.argv.slice(2);
 if (!['create', 'reset'].includes(action) || !['--local', '--remote'].includes(target) || process.argv.length !== 4) {
@@ -48,7 +53,7 @@ try {
   const password = await secret('Password (8–128 characters): ');
   if ([...password].length < 8 || [...password].length > 128) throw new Error('Password must contain 8–128 characters.');
   if (password !== await secret('Confirm password: ')) throw new Error('Passwords do not match.');
-  const hash = await argon2id({ password, salt: randomBytes(16), memorySize: 19456, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'encoded' });
+  const hash = hashPasswordPbkdf2(password, randomBytes(16));
   const now = Math.floor(Date.now() / 1000);
   const sql = ownerSql(action, email, hash, now);
   directory = mkdtempSync(join(tmpdir(), 'fadeloop-owner-'));

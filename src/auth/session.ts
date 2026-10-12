@@ -103,6 +103,14 @@ export async function handleSession(req: Request, env: Env, pathname: string): P
   // Same expensive work for unknown emails; use the real hash but do not grant access.
   const verified = owner ? await verifyPassword(body.password, owner.password_hash) : false;
   if (!owner || !verified || owner.email !== email) return json({ error: "Invalid email or password" }, 401);
+
+  // Transparently upgrade legacy Argon2id hashes to fast native PBKDF2
+  if (owner.password_hash.startsWith("$argon2id$")) {
+    const upgradedHash = await hashPassword(body.password);
+    await env.DB.prepare("UPDATE owner_accounts SET password_hash = ?, updated_at = ? WHERE id = 1 AND credential_version = ?")
+      .bind(upgradedHash, current, owner.credential_version).run();
+  }
+
   const token = randomToken();
   const expires = current + LIFETIME;
   // A concurrent operator reset cannot issue a valid session for the old credentials.

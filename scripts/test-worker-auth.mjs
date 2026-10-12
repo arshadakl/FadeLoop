@@ -1,3 +1,4 @@
+import {applyLocalMigrations} from './local-migrations.mjs';
 // Exercise the deploy bundle and statically imported WASM inside actual workerd, with local D1.
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -16,10 +17,7 @@ const mf = new Miniflare({
 });
 try {
   const db = await mf.getD1Database('DB');
-  for (const file of readdirSync('schema').filter(f => f.endsWith('.sql')).sort()) {
-    const sql = readFileSync(`schema/${file}`, 'utf8').replace(/^--.*$/gm, '');
-    for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run();
-  }
+  await applyLocalMigrations(db);
   const password = 'eight123';
   const hash = await argon2id({ password, salt: new Uint8Array(16).fill(7), memorySize: 19456, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'encoded' });
   await db.prepare('INSERT INTO owner_accounts (id,email,password_hash,updated_at) VALUES (1,?,?,0)').bind('owner@example.com', hash).run();
