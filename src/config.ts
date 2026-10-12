@@ -48,6 +48,7 @@ export function validateCampaign(input: unknown, index = 0): Campaign {
     throw new ConfigError(`${where}.copy.opening and copy.delivery are required`);
   }
 
+
   if (c.public_reply !== undefined) {
     const pr = c.public_reply as Record<string, unknown>;
     if (typeof pr.enabled !== "boolean") {
@@ -89,6 +90,16 @@ export function validateCampaign(input: unknown, index = 0): Campaign {
   };
 }
 
+/** Write-time policy; legacy configurations remain readable for owner review. */
+export function assertDistinctButtonLabels(c: Campaign): void {
+  const label = (v: string | undefined, fallback: string) => {
+    let out=''; for(const ch of v?.trim() || fallback){if(out.length+ch.length>20)break;out+=ch;}
+    return out.normalize('NFC').replace(/[\uFE0E\uFE0F]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+  };
+  if(c.check_follow && label(c.copy.opening_button,'Continue')===label(c.copy.follow_button,'\u2705 I followed'))
+    throw new ConfigError('Opening and follow buttons must have distinct labels');
+}
+
 /** Keep a copy field only if it is a non-empty string; anything else falls back to the default. */
 function optionalString(v: unknown): string | undefined {
   return isNonEmptyString(v) ? v : undefined;
@@ -104,6 +115,8 @@ export function validateConfig(input: unknown): AppConfig {
     throw new ConfigError("config.campaigns must be a non-empty array");
   }
   const campaigns = cfg.campaigns.map((c, i) => validateCampaign(c, i));
+
+  campaigns.forEach(assertDistinctButtonLabels);
 
   // Enforce unique campaign_ids.
   const ids = new Set<string>();

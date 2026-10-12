@@ -1842,6 +1842,11 @@
 .folder-toolbar { margin: 0 0 18px; }
 .folder-toolbar > button[role="combobox"] { width: min(100%, 280px); }
 .folder-dialog, .account-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.automation-safety { display: grid; gap: 12px; border-top: 1px solid var(--border); padding-top: 20px; overflow-wrap: anywhere; }
+.automation-safety p { margin: 0; font-size: 13px; line-height: 1.5; }
+.automation-safety > div, .automation-safety li > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.automation-safety ul { list-style: none; padding: 0; display: grid; gap: 12px; }
+.automation-safety li { border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
 .folder-dialog form, .password-settings { display: grid; gap: 12px; min-width: 0; }
 .password-settings { border-top: 1px solid var(--border); padding-top: 18px; }
 .password-settings h3 { font-weight: 650; }

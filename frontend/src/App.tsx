@@ -38,6 +38,7 @@ import { Automations, ArchivePage, Dashboard, Contacts } from "./pages";
 import { Builder } from "./Builder";
 import { DisconnectSettings } from "./DisconnectSettings";
 import { PasswordSettings } from "./PasswordSettings";
+import { AutomationSafety } from './AutomationSafety';
 import { readWorkspaceLocation, useWorkspaceHistory } from "./hooks/use-workspace-history";
 
 const navigation = [
@@ -675,6 +676,7 @@ function AccountDialog({
           />
         </div>
         {session && onSession && <PasswordSettings key={String(open)} changed={onSession} />}
+        {session && <AutomationSafety key={`automation-${open}`} />}
         {connection?.connected && onDisconnect && <DisconnectSettings status={connection} dirty={dirty} done={onDisconnect} />}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

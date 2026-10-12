@@ -47,10 +47,10 @@ export interface Status {
   token_expired?: boolean;
   username?: string;
   profile_picture_url?: string;
-  poll_healthy?: boolean;
+  poll_healthy?: boolean | null;
   poll_age_seconds?: number | null;
-  poll_error?: string | null;
-  comment_poll_error?: string | null;
+  poll_error?: {at:number;message:string} | null;
+  comment_poll_error?: {at:number;message:string} | null;
 }
 export interface Session {
   email: string;
@@ -73,6 +73,8 @@ export interface Contact {
   username?: string;
   campaign_id: string;
   state: string;
+  lifecycle?: 'active' | 'completed' | 'failed' | 'closed';
+  terminal_reason?: string | null;
   status_label: string;
   followed: boolean;
   email?: string;

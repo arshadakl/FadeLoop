@@ -1,8 +1,8 @@
 // D1 data-access helpers. All timestamps are unix seconds. Kept intentionally thin so the
 // engine stays readable and cron ticks do minimal work (Workers free-tier 10ms CPU budget).
 
-import type { AuthRow, Campaign, EventType, State } from "./types";
-import { validateCampaign } from "./config";
+import type { AuthRow, Campaign, EventType, State, ConversationLifecycle } from "./types";
+import { validateCampaign, assertDistinctButtonLabels } from "./config";
 
 export function now(): number {
   return Math.floor(Date.now() / 1000);
@@ -99,9 +99,10 @@ export async function setCampaignActive(db: D1Database, campaignId: string, acti
       ON CONFLICT(campaign_id) DO UPDATE SET activated_at = excluded.activated_at WHERE (SELECT active FROM campaigns WHERE campaign_id = ?) = 0`).bind(now(), campaignId, campaignId));
   }
   statements.push(db
-    .prepare("UPDATE campaigns SET active = ?, updated_at = ? WHERE campaign_id = ?")
-    .bind(active ? 1 : 0, now(), campaignId)
+    .prepare("UPDATE campaigns SET resumed_at=CASE WHEN active=0 AND ?=1 THEN ? ELSE resumed_at END,active_since = CASE WHEN active=0 AND ?=1 THEN ? ELSE active_since END, active = ?, updated_at = ? WHERE campaign_id = ?")
+    .bind(active ? 1 : 0, now(),active ? 1 : 0, now(), active ? 1 : 0, now(), campaignId)
     );
+  if(active)statements.push(db.prepare('DELETE FROM campaign_conflicts WHERE media_id=(SELECT media_id FROM campaigns WHERE campaign_id=?)').bind(campaignId));
   await db.batch(statements);
 }
 
@@ -113,15 +114,14 @@ export async function setCampaignArchived(db: D1Database, campaignId: string, ar
     if (campaign?.match_mode === "any") {
       await db.batch([
         db.prepare("UPDATE campaign_trigger_activation SET activated_at = ? WHERE campaign_id = ? AND EXISTS (SELECT 1 FROM campaigns WHERE campaign_id = ? AND archived_at IS NOT NULL AND active = 1)").bind(now(), campaignId, campaignId),
-        db.prepare("UPDATE campaigns SET archived_at = NULL, updated_at = ? WHERE campaign_id = ?").bind(now(), campaignId),
+        db.prepare("UPDATE campaigns SET resumed_at=CASE WHEN archived_at IS NOT NULL THEN ? ELSE resumed_at END,active_since=CASE WHEN archived_at IS NOT NULL THEN ? ELSE active_since END, archived_at = NULL, updated_at = ? WHERE campaign_id = ?").bind(now(),now(),now(), campaignId),
       ]);
       return;
     }
   }
-  await db
-    .prepare("UPDATE campaigns SET archived_at = ?, updated_at = ? WHERE campaign_id = ?")
-    .bind(archived ? now() : null, now(), campaignId)
-    .run();
+  await db.batch([db
+    .prepare("UPDATE campaigns SET resumed_at=CASE WHEN archived_at IS NOT NULL AND ? IS NULL THEN ? ELSE resumed_at END,active_since=CASE WHEN archived_at IS NOT NULL AND ? IS NULL THEN ? ELSE active_since END,archived_at = ?, updated_at = ? WHERE campaign_id = ?")
+    .bind(archived ? now() : null,now(),archived ? now() : null,now(),archived ? now() : null, now(), campaignId)]);
 }
 
 /**
@@ -133,20 +133,20 @@ export async function setCampaignArchived(db: D1Database, campaignId: string, ar
  */
 export async function deleteCampaign(db: D1Database, campaignId: string): Promise<void> {
   await db.batch([
+    db.prepare("UPDATE outbound_jobs SET status='cancelled',updated_at=? WHERE campaign_instance=(SELECT instance_id FROM campaigns WHERE campaign_id=?) AND status IN ('pending','held','retry_scheduled')").bind(Date.now(),campaignId),
     db.prepare("DELETE FROM campaigns WHERE campaign_id = ?").bind(campaignId),
     db.prepare("DELETE FROM conversations WHERE campaign_id = ?").bind(campaignId),
     db.prepare("DELETE FROM processed_comments WHERE campaign_id = ?").bind(campaignId),
     db.prepare("DELETE FROM events WHERE campaign_id = ?").bind(campaignId),
-    // Send claims too. Every claim key is `<what>:<campaign_id>:<who>`, so this drops exactly this
-    // campaign's. Leaving them behind used to be harmless only because the opening's key named the
-    // COMMENT; now that it names the person, a stale claim would silently block their opening DM
-    // if the campaign were deleted and recreated under the same id — which the builder does every
-    // time you re-use a campaign name. Deleting a campaign clears its dedup history completely.
-    db.prepare("DELETE FROM send_claims WHERE key LIKE ?").bind(`%:${campaignId}:%`),
+    // Legacy keys and dispatched jobs are suppression evidence; never pattern-delete them.
   ]);
 }
 
 export async function upsertCampaign(db: D1Database, campaign: Campaign, active = true, folderId?: string | null): Promise<void> {
+  await db.batch(campaignUpsertStatements(db,campaign,active,folderId));
+}
+export function campaignUpsertStatements(db:D1Database,campaign:Campaign,active=true,folderId?:string|null):D1PreparedStatement[]{
+  assertDistinctButtonLabels(campaign);
   const statements: D1PreparedStatement[] = [];
   if (campaign.match_mode === "any" && active) {
     statements.push(db.prepare(`UPDATE campaign_trigger_activation SET activated_at = ? WHERE campaign_id = ? AND EXISTS
@@ -156,19 +156,22 @@ export async function upsertCampaign(db: D1Database, campaign: Campaign, active 
   const { activated_at: _ignored, ...config } = campaign;
   statements.push(db
     .prepare(
-      `INSERT INTO campaigns (campaign_id, platform, media_id, config_json, active, updated_at)
-       VALUES (?, 'instagram', ?, ?, ?, ?)
+      `INSERT INTO campaigns (campaign_id, platform, media_id, config_json, active, updated_at,instance_id,active_since)
+       VALUES (?, 'instagram', ?, ?, ?, ?,?,?)
        ON CONFLICT(campaign_id) DO UPDATE SET
          media_id = excluded.media_id,
          config_json = excluded.config_json,
          active = excluded.active,
+         resumed_at = CASE WHEN campaigns.active=0 AND excluded.active=1 THEN excluded.active_since ELSE campaigns.resumed_at END,
+         active_since = CASE WHEN campaigns.active=0 AND excluded.active=1 THEN excluded.active_since ELSE campaigns.active_since END,
          updated_at = excluded.updated_at`,
     )
-    .bind(campaign.campaign_id, campaign.media_id, JSON.stringify(config), active ? 1 : 0, now()));
+    .bind(campaign.campaign_id, campaign.media_id, JSON.stringify(config), active ? 1 : 0, now(),crypto.randomUUID(),now()));
   if (campaign.match_mode === "any" && active) statements.push(db.prepare("INSERT OR IGNORE INTO campaign_trigger_activation (campaign_id, activated_at) VALUES (?, ?)").bind(campaign.campaign_id, now()));
   if (folderId === null) statements.push(db.prepare("DELETE FROM campaign_folders WHERE campaign_id = ?").bind(campaign.campaign_id));
   else if (folderId !== undefined) statements.push(db.prepare("INSERT INTO campaign_folders (campaign_id, folder_id) VALUES (?, ?) ON CONFLICT(campaign_id) DO UPDATE SET folder_id = excluded.folder_id").bind(campaign.campaign_id, folderId));
-  await db.batch(statements);
+  if(active)statements.push(db.prepare('DELETE FROM campaign_conflicts WHERE media_id=?').bind(campaign.media_id));
+  return statements;
 }
 
 // ---- idempotency ledgers ----
@@ -239,6 +242,9 @@ export interface ConversationRow {
   igsid: string;
   campaign_id: string;
   state: State;
+  lifecycle: ConversationLifecycle;
+  terminal_job_id: string | null;
+  terminal_reason: string | null;
   username: string | null;
   email: string | null;
   followed: number;
@@ -506,6 +512,10 @@ export async function saveAuth(
         THEN generation + 1 ELSE -1 END WHERE id = 1`)
         .bind(replacement.generation, replacement.sessionHash, replacement.credentialVersion, now()),
       statement,
+      db.prepare("UPDATE outbound_jobs SET generation=?,status=CASE WHEN status='sending' THEN 'unknown' ELSE status END,error=CASE WHEN status='sending' THEN 'Connection replaced during dispatch; no automatic replay' ELSE error END WHERE generation=?").bind(replacement.generation+1,replacement.generation),
+      db.prepare("UPDATE inbound_events SET generation=?,status=CASE WHEN status='processing' THEN 'pending' ELSE status END,lease_token=NULL,lease_until=0 WHERE generation=?").bind(replacement.generation+1,replacement.generation),
+      db.prepare('UPDATE polling_checkpoints SET generation=? WHERE generation=?').bind(replacement.generation+1,replacement.generation),
+      db.prepare("UPDATE automation_control SET enabled=0,hold_reason=CASE WHEN hold_reason='Instagram authorization requires attention' THEN NULL ELSE hold_reason END WHERE id=1"),
     ]);
   } else await statement.run();
 }

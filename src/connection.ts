@@ -2,6 +2,10 @@
 export class ConnectionChangedError extends Error {
   constructor() { super("Instagram connection changed. Refresh and try again."); }
 }
+/** A provider request was never started because its database preflight failed. */
+export class ConnectionCheckFailedError extends Error {
+  constructor() { super('Connection database check unavailable'); }
+}
 export async function connectionGeneration(db: D1Database): Promise<number> {
   const row = await db.prepare("SELECT generation FROM instagram_connection_state WHERE id = 1").first<{ generation: number }>();
   if (!row) throw new Error("Instagram connection migration is required");

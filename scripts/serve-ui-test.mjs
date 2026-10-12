@@ -1,3 +1,4 @@
+import {applyLocalMigrations} from './local-migrations.mjs';
 // Disposable UI-test instance. Uses in-memory D1, never the owner's local or remote database.
 import { Miniflare } from 'miniflare';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -13,10 +14,7 @@ export const mf = new Miniflare({
   bindings: { MODE: 'polling', GRAPH_VERSION: 'v23.0', POLL_INTERVAL_SECONDS: '60', REDIRECT_URI: 'http://127.0.0.1:8789/auth/callback', APP_ID: 'test', APP_SECRET: 'test' },
 });
 const db = await mf.getD1Database('DB');
-for (const file of readdirSync('schema').filter(f => f.endsWith('.sql')).sort()) {
-  const sql = readFileSync(`schema/${file}`, 'utf8').replace(/^--.*$/gm, '');
-  for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run();
-}
+await applyLocalMigrations(db);
 const password = 'mobile test password with spaces';
 const hash = await argon2id({ password, salt: new Uint8Array(16).fill(9), memorySize: 19456, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'encoded' });
 await db.prepare('INSERT INTO owner_accounts (id,email,password_hash,updated_at) VALUES (1,?,?,0)').bind('owner@example.com', hash).run();

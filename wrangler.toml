@@ -17,7 +17,7 @@ compatibility_date = "2025-07-01"
 compatibility_flags = ["nodejs_compat"]
 
 # Cron triggers (all free tier).
-#  - every minute: poll comments + inbound messages for active campaigns
+#  - every minute: resume durable jobs; poll only when the configured interval is due
 #  - daily 03:00 UTC: refresh the long-lived Instagram token if it is due
 [triggers]
 crons = ["* * * * *", "0 3 * * *"]
@@ -26,7 +26,7 @@ crons = ["* * * * *", "0 3 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "fadeloop"
-database_id = "675b380c-16fe-4166-8773-653257ed21fa"
+database_id = "32eddfdf-4c1f-4e83-a3e9-c53d1fe4e0ed"
 migrations_dir = "schema"
 
 # Web UI (Section 7A). Static files in ./public are served automatically; the Worker handles
@@ -50,23 +50,18 @@ GRAPH_VERSION = "v23.0"
 # URL with Meta, which is step 3.5 of the README's setup. Part 6 is how you confirm it took.
 #
 # The combination you want is this one: MODE = "polling" AND a registered callback URL. Push makes
-# delivery instant; the 60-second poll sits underneath and catches anything a delivery drops.
+# delivery instant; the three-minute poll sits underneath and catches anything a delivery drops.
 #
 # Setting "webhook" before push is confirmed working is the classic way to break this: no events
 # arrive, the only thing still running is the 15-minute sweep, and every DM looks ~15 minutes late
-# as if FadeLoop were broken. Even once push IS working, "webhook" only makes your safety net 15x
-# slower — if push ever fails you wait 15 minutes to notice instead of 60 seconds.
+# as if FadeLoop were broken. Even once push IS working, "webhook" only makes your safety net 5x
+# slower — if push ever fails you wait 15 minutes to notice instead of three minutes.
 MODE = "polling"
-# Seconds between comment/message polls. The cron can only fire once a minute, and a tick is
-# skipped unless this many seconds have elapsed — so 90 here actually meant polling every 120s
-# (the 60s tick was refused, the next chance was 120s). 60 makes every tick count, which is the
-# fastest polling can go: worst case ~60s from comment to DM instead of ~120s.
-#
-# This is the SAFETY NET, not your delivery path. If you completed step 3.5 of the setup, Meta
-# pushes each comment to you and the DM goes out in a second or two; this poll only catches what a
-# push delivery drops. 60s is polling's floor — it is what you fall back to, and what you get if
-# you skipped 3.5. Either way, LEAVE MODE as "polling".
-POLL_INTERVAL_SECONDS = "60"
+# Seconds between Instagram reconciliation polls. Minute cron ticks still resume durable jobs.
+# 180 reduces polling opportunities by two thirds compared with 60. In polling-only
+# operation, discovery can take three minutes or longer while pagination catches up.
+# Verified webhook events remain immediate. Use multiples of 60 for predictable cadence.
+POLL_INTERVAL_SECONDS = "180"
 # Only used when MODE = "webhook": how often to run a slow reconciliation poll that catches anything
 # a webhook delivery missed (Meta gives up after a few retries; a redeploy or a blip loses those leads with
 # nothing to notice it). Safe to run alongside push — the engine's idempotency ledgers mean an
@@ -74,4 +69,4 @@ POLL_INTERVAL_SECONDS = "60"
 WEBHOOK_RECONCILE_SECONDS = "900"
 # Redirect URI registered in your Meta app. Must match exactly: https://<your-worker>/auth/callback
 # You MUST change this before deploying — the placeholder is not a working URL.
-REDIRECT_URI = "https://fadeloop.arshadayanikkal.workers.dev/auth/callback"
+REDIRECT_URI = "https://fadeloop.time-fade.workers.dev/auth/callback"

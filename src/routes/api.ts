@@ -3,7 +3,7 @@ import { connectionGeneration } from "../connection";
 // (index.ts) via the owner session. The UI is a pure config editor + monitor over the same tables
 // the engine uses — no new funnel behavior.
 
-import { validateCampaign } from "../config";
+import { validateCampaign, assertDistinctButtonLabels } from "../config";
 import {
   deleteCampaign,
   eventCountsByType,
@@ -15,7 +15,8 @@ import {
   setCampaignArchived,
   upsertCampaign,
 } from "../db";
-import { buildRuntime } from "../runtime";
+import { buildRuntime, pollIntervalSeconds } from "../runtime";
+import { automationStatus,handleAutomation } from '../reliability/status';
 import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
 import { getCommentPollError } from "../poller/commentPoll";
 import type { Env } from "../types";
@@ -25,6 +26,7 @@ import { folders, validFolder } from "./folders";
 export async function handleApi(env: Env, req: Request, url: URL): Promise<Response> {
   const path = url.pathname;
   const method = req.method.toUpperCase();
+  if(path==='/api/automation'||path.startsWith('/api/automation/'))return handleAutomation(env,req,url);
   if (path === "/api/folders" || path.startsWith("/api/folders/")) return folders(env, req, path);
 
   // Connection status + connected profile (drives the preview + settings screen).
@@ -57,6 +59,7 @@ async function statusResponse(env: Env): Promise<Response> {
   const pollAge = await getPollAgeSeconds(env.DB);
   const pollError = await getPollError(env.DB);
   const commentPollError = await getCommentPollError(env.DB);
+  const interval=pollIntervalSeconds(env);
   return json({
     connected: true,
     connection_generation: auth.connection_generation,
@@ -70,7 +73,10 @@ async function statusResponse(env: Env): Promise<Response> {
     // A healthy message poll refreshes its cursor every tick, so anything past a few minutes means
     // the poller is not completing. null means it has never run.
     poll_age_seconds: pollAge,
-    poll_healthy: pollAge !== null && pollAge < 600 && !commentPollError,
+    poll_healthy: interval===null?null:pollAge !== null && pollAge < Math.max(180,interval*3) && !commentPollError && !pollError,
+    polling_enabled:interval!==null,
+    automation:await automationStatus(env.DB),
+    build_revision:env.BUILD_REVISION??'reliability-v2',
     poll_error: pollError,
     comment_poll_error: commentPollError,
   });
@@ -107,6 +113,7 @@ async function campaignSave(env: Env, req: Request): Promise<Response> {
   let campaign;
   try {
     campaign = validateCampaign(payload.campaign);
+    assertDistinctButtonLabels(campaign);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 400);
   }
@@ -184,7 +191,9 @@ async function contacts(env: Env, url: URL): Promise<Response> {
       username: r.username,
       campaign_id: r.campaign_id,
       state: r.state,
-      status_label: STATE_LABEL[r.state] ?? r.state,
+      lifecycle:r.lifecycle,
+      terminal_reason:r.terminal_reason,
+      status_label: r.lifecycle==='failed'?'Sending failed':r.lifecycle==='closed'?'Closed unresolved':STATE_LABEL[r.state] ?? r.state,
       followed: r.followed === 1,
       email: r.email,
       updated_at: r.updated_at,
@@ -195,7 +204,7 @@ async function contacts(env: Env, url: URL): Promise<Response> {
 async function contactsCsv(env: Env, url: URL): Promise<Response> {
   const campaignId = url.searchParams.get("campaign_id");
   const rows = await listConversations(env.DB, campaignId);
-  const header = ["username", "igsid", "campaign_id", "status", "followed", "email", "updated_at"];
+  const header = ["username", "igsid", "campaign_id", "status", "followed", "email", "updated_at", "lifecycle", "terminal_reason"];
   const lines = [header.join(",")];
   for (const r of rows) {
     lines.push(
@@ -203,10 +212,12 @@ async function contactsCsv(env: Env, url: URL): Promise<Response> {
         csv(r.username ?? ""),
         csv(r.igsid),
         csv(r.campaign_id),
-        csv(STATE_LABEL[r.state] ?? r.state),
+        csv(r.lifecycle==='failed'?'Sending failed':r.lifecycle==='closed'?'Closed unresolved':STATE_LABEL[r.state] ?? r.state),
         r.followed === 1 ? "yes" : "no",
         csv(r.email ?? ""),
         new Date(r.updated_at * 1000).toISOString(),
+        csv(r.lifecycle),
+        csv(r.terminal_reason??''),
       ].join(","),
     );
   }

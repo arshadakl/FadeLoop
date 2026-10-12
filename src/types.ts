@@ -14,6 +14,8 @@ export interface Env {
    *  deliveries. "off" or 0 disables them (pure push). Defaults to 900. */
   WEBHOOK_RECONCILE_SECONDS?: string;
   REDIRECT_URI: string;
+  AUTOMATION_MAINTENANCE?: string;
+  BUILD_REVISION?: string;
 
   // secrets (wrangler secret put ...)
   APP_ID: string;
@@ -29,6 +31,7 @@ export type State =
   | "AWAITING_EMAIL"
   | "DELIVER"
   | "DONE";
+export type ConversationLifecycle = 'active' | 'completed' | 'failed' | 'closed';
 
 /** Analytics event types (mirrors events.type). */
 export type EventType =
@@ -90,7 +93,10 @@ export interface AppConfig {
 
 /** Normalized event the engine consumes, regardless of transport (poll or webhook). */
 export interface NormalizedComment {
+  /** Durable continuation while resolving original time from the media comments edge. */
+  timestamp_lookup_cursor?: string;
   kind: "comment";
+  timestamp_ms?: number;
   comment_id: string;
   igsid: string;
   username?: string;
@@ -101,6 +107,8 @@ export interface NormalizedComment {
 
 export interface NormalizedMessage {
   kind: "message";
+  message_id?: string;
+  timestamp_ms?: number;
   igsid: string;
   text?: string;
   /** Postback / quick-reply payload if the transport exposes it (webhooks do; polling may not). */

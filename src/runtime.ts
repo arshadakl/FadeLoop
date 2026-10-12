@@ -1,12 +1,13 @@
 // Builds the per-invocation runtime (API client + send queue + engine) from stored auth.
-// Returns null when no account is connected or the token has lapsed.
+// Expired credentials may retain inbound work, but never authorize sending.
 
-import { assertConnection, guardedConnectionDb } from "./connection";
+import { assertConnection, guardedConnectionDb, ConnectionChangedError, ConnectionCheckFailedError } from "./connection";
 import { InstagramClient } from "./api/client";
 import { SendQueue } from "./queue/queue";
 import { Engine } from "./engine/engine";
 import { getAuth, now } from "./db";
 import type { AuthRow, Env } from "./types";
+import { remainingQueries,WorkBudgetExceeded } from './reliability/budget';
 
 export interface Runtime {
   db: D1Database;
@@ -17,22 +18,29 @@ export interface Runtime {
   igUserId: string;
 }
 
-export async function buildRuntime(env: Env): Promise<Runtime | null> {
+export async function buildRuntime(env: Env, allowExpiredIngestion=false): Promise<Runtime | null> {
   const auth = await getAuth(env.DB);
   if (!auth) {
     console.warn("[FadeLoop] no Instagram account connected; skipping.");
     return null;
   }
-  if (auth.expires_at <= now()) {
+  const expired=auth.expires_at<=now();
+  if (expired && !allowExpiredIngestion) {
     console.warn("[FadeLoop] access token expired; owner must reconnect. Skipping.");
     return null;
   }
-  const igUserId = auth.ig_user_id ?? "me";
-  const check = () => assertConnection(env.DB, auth.connection_generation);
+  if (!auth.ig_user_id) return null;
+  const igUserId = auth.ig_user_id;
+  const check = async () => {
+    try{await assertConnection(env.DB, auth.connection_generation);}
+    catch(error){if(error instanceof ConnectionChangedError||error instanceof WorkBudgetExceeded)throw error;throw new ConnectionCheckFailedError();}
+  };
   const db = guardedConnectionDb(env.DB, auth.connection_generation);
-  const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId, check);
-  const queue = new SendQueue({ beforeAttempt: check });
-  const engine = new Engine(db, client, queue);
+  const deadline=Date.now()+25_000;
+  const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId, check,deadline);
+  const queue = new SendQueue({ beforeAttempt: check, maxRetries: 0 });
+  const engine = new Engine(db, client, queue,{generation:auth.connection_generation,igUserId,
+    maintenance:expired||env.AUTOMATION_MAINTENANCE==='true',deadline,remainingQueries:()=>remainingQueries(env.DB)});
   return { client, queue, engine, auth, igUserId, db };
 }
 
@@ -51,8 +59,8 @@ const DEFAULT_RECONCILE_SECONDS = 900; // 15 min
  * loses those leads with nothing to notice or recover them. Polling re-reads recent comments and
  * messages, so anything a webhook missed still gets picked up a few minutes later.
  *
- * Running both is safe precisely because the engine is idempotent: processed_comments, send_claims
- * and the per-person conversation dedup mean a comment already handled via webhook is recognised
+ * Running both is safe because durable event identities and unique outbound actions
+ * mean a comment already handled via webhook is recognised
  * and skipped, never re-sent. Set WEBHOOK_RECONCILE_SECONDS to "off" (or 0) for pure push.
  */
 export function pollIntervalSeconds(env: Env): number | null {

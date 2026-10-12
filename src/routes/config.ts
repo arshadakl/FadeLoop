@@ -2,7 +2,7 @@
 // same campaigns table; for the backend core these let you seed campaigns from config.json.
 
 import { validateConfig } from "../config";
-import { getActiveCampaigns, upsertCampaign } from "../db";
+import { getActiveCampaigns, campaignUpsertStatements } from "../db";
 import type { Env } from "../types";
 import { json } from "./http";
 
@@ -20,9 +20,11 @@ export async function handleConfigImport(env: Env, req: Request): Promise<Respon
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 400);
   }
-  for (const campaign of cfg.campaigns) {
-    await upsertCampaign(env.DB, campaign, true);
-  }
+  const media=new Set<string>();
+  for(const campaign of cfg.campaigns){if(media.has(campaign.media_id))return json({error:'Only one automation may be active per post'},409);media.add(campaign.media_id);}
+  const statements=cfg.campaigns.flatMap(campaign=>campaignUpsertStatements(env.DB,campaign,true));
+  if(statements.length>30)return json({error:'Import exceeds the atomic query budget; use a smaller configuration (at most 10 keyword or 6 Any comment automations)'},413);
+  await env.DB.batch(statements);
   return json({ imported: cfg.campaigns.length, campaign_ids: cfg.campaigns.map((c) => c.campaign_id) });
 }
 
