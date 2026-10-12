@@ -4,6 +4,12 @@
 // against the API version pinned in wrangler.toml (GRAPH_VERSION).
 
 const GRAPH_HOST = "https://graph.instagram.com";
+export interface GraphPage<T> { data: T[]; cursor: string | null }
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : Math.max(0, (Date.parse(value)-Date.now())/1000) || undefined;
+}
 
 /** Webhook fields FadeLoop consumes. `comments` drives the funnel entry; `messages` carries taps,
  *  postback payloads, and typed replies. Both are needed — subscribing to only one silently breaks
@@ -20,6 +26,7 @@ export class InstagramApiError extends Error {
     readonly code?: number,
     readonly subcode?: number,
     readonly fbtraceId?: string,
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "InstagramApiError";
@@ -93,6 +100,7 @@ export class InstagramClient {
     /** The connected account's IG user id; message sends are POSTed to /{igUserId}/messages. */
     private readonly igUserId: string = "me",
     private readonly beforeRequest: () => Promise<void> = async () => {},
+    private readonly deadline=Infinity,
   ) {}
 
   private base(path: string): string {
@@ -105,7 +113,7 @@ export class InstagramClient {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("access_token", this.accessToken);
     await this.beforeRequest();
-    const res = await fetch(url.toString(), { method: "GET" });
+    const res = await fetch(url.toString(), { method: "GET", signal: AbortSignal.timeout(Math.max(1,Math.min(15_000,this.deadline-Date.now()))) });
     return this.parse<T>(res);
   }
 
@@ -118,7 +126,7 @@ export class InstagramClient {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("access_token", this.accessToken);
     await this.beforeRequest();
-    const res = await fetch(url.toString(), { method: "POST" });
+    const res = await fetch(url.toString(), { method: "POST",signal:AbortSignal.timeout(Math.max(1,Math.min(15_000,this.deadline-Date.now()))) });
     return this.parse<T>(res);
   }
 
@@ -129,6 +137,7 @@ export class InstagramClient {
     await this.beforeRequest();
     const res = await fetch(url.toString(), {
       method: "POST",
+      signal: AbortSignal.timeout(Math.max(1,Math.min(15_000,this.deadline-Date.now()))),
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -152,6 +161,7 @@ export class InstagramClient {
         err?.code,
         err?.error_subcode,
         err?.fbtrace_id,
+        parseRetryAfter(res.headers.get('retry-after')),
       );
     }
     return json as T;
@@ -164,6 +174,7 @@ export class InstagramClient {
     return this.post(`/${this.igUserId}/messages`, {
       recipient: { id: recipientIgsid },
       message: { text },
+      messaging_type: "RESPONSE",
     });
   }
 
@@ -176,6 +187,7 @@ export class InstagramClient {
     return this.post(`/${this.igUserId}/messages`, {
       recipient: { id: recipientIgsid },
       message: { text, quick_replies: quickReplies },
+      messaging_type: "RESPONSE",
     });
   }
 
@@ -193,6 +205,7 @@ export class InstagramClient {
           payload: { template_type: "button", text, buttons },
         },
       },
+      ...(recipient.commentId ? {} : { messaging_type: "RESPONSE" }),
     });
   }
 
@@ -247,6 +260,11 @@ export class InstagramClient {
 
   // ---- reads ----
 
+  /** Resolve original creation time when a comment webhook omits it. */
+  getCommentTimesPage(mediaId: string, cursor?: string): Promise<GraphPage<Pick<IgComment, 'id' | 'timestamp'>>> {
+    return this.page(`/${encodeURIComponent(mediaId)}/comments`, { fields: 'id,timestamp', limit: '50' }, cursor);
+  }
+
   /** Read comments on a media object. Only called for media attached to an active campaign. */
   async getComments(mediaId: string, limit = 50): Promise<IgComment[]> {
     const res = await this.get<{ data?: IgComment[] }>(`/${mediaId}/comments`, {
@@ -254,6 +272,21 @@ export class InstagramClient {
       limit: String(limit),
     });
     return res.data ?? [];
+  }
+
+  async getCommentsPage(mediaId: string, cursor?: string): Promise<GraphPage<IgComment>> {
+    return this.page(`/${mediaId}/comments`, {fields:'id,text,timestamp,username,from{id,username}',limit:'50'},cursor);
+  }
+  async getConversationsPage(cursor?: string): Promise<GraphPage<IgConversation>> {
+    return this.page(`/${this.igUserId}/conversations`,{platform:'instagram',fields:'id',limit:'20'},cursor);
+  }
+  async getMessagesPage(threadId: string,cursor?:string): Promise<GraphPage<IgMessage>> {
+    return this.page(`/${threadId}/messages`,{fields:'id,from,to,message,created_time',limit:'50'},cursor);
+  }
+  private async page<T>(path:string,params:Record<string,string>,cursor?:string):Promise<GraphPage<T>> {
+    const response=await this.get<{data?:T[];paging?:{next?:string;cursors?:{after?:string}}}>(path,{...params,...(cursor?{after:cursor}:{})});
+    if(!Array.isArray(response?.data) || (response.paging?.next && !response.paging.cursors?.after))throw new Error('Unsupported Graph pagination response');
+    return {data:response.data,cursor:response.paging?.next?response.paging.cursors!.after!:null};
   }
 
   /** Read recent conversations + their messages (how inbound taps/replies arrive without webhooks). */
