@@ -23,6 +23,7 @@ const campaign: Campaign = { campaign_id: "active", media_id: "post", match_mode
 const deletedTables = ["campaigns", "campaign_folders", "campaign_trigger_activation", "automation_folders", "conversations", "events", "processed_comments", "comment_actions", "send_claims", "auth", "kv", "owner_oauth_states"];
 async function fixture() {
   const { db, raw } = makeTestDbWithHandle();
+  raw.exec('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0');
   await db.prepare("INSERT INTO owner_accounts (id,email,password_hash,updated_at) VALUES (1,'owner@example.com',?,0)").bind(hash).run();
   await db.prepare("INSERT INTO owner_sessions (token_hash,owner_id,credential_version,expires_at,created_at) VALUES (?,1,1,?,0)").bind(await digest(token), timestamp() + 3600).run();
   await saveAuth(db, { access_token: "fixture", ig_user_id: "instagram", expires_at: timestamp() + 86400 });
@@ -121,7 +122,7 @@ describe("password-confirmed workspace reset", () => {
     expect(await count(db, "kv")).toBe(0);
     expect(await db.prepare("SELECT access_token FROM auth").first()).toMatchObject({ access_token: "new" });
   });
-  it("checks connection before every rate-limit retry", async () => {
+  it("never retries a rate-limit error inside the legacy queue", async () => {
     const { env, db } = await fixture();
     const queue = new SendQueue({ minIntervalMs: 0, baseBackoffMs: 0, beforeAttempt: () => assertConnection(db, 0) });
     let calls = 0;
@@ -129,7 +130,7 @@ describe("password-confirmed workspace reset", () => {
       calls++;
       expect((await disconnectInstagram(request(), env)).status).toBe(200);
       throw new InstagramApiError("rate limit", 429);
-    })).rejects.toBeInstanceOf(ConnectionChangedError);
+    })).rejects.toBeInstanceOf(InstagramApiError);
     expect(calls).toBe(1);
   });
   it("does not recreate contacts or analytics when a submitted send completes after disconnect", async () => {
@@ -156,9 +157,9 @@ describe("password-confirmed workspace reset", () => {
   it("polling already in progress cannot restore comment ledgers or polling/error cursors", async () => {
     const { env, db } = await fixture();
     const runtime = (await buildRuntime(env))!;
-    vi.spyOn(runtime.client, "getComments").mockImplementation(async () => {
+    vi.spyOn(runtime.client, "getCommentsPage").mockImplementation(async () => {
       expect((await disconnectInstagram(request(), env)).status).toBe(200);
-      return [{ id: "late", text: "hello", from: { id: "late" }, timestamp: new Date(Date.now() + 1000).toISOString() }];
+      return {data:[{ id: "late", text: "hello", from: { id: "late" }, timestamp: new Date(Date.now() + 1000).toISOString() }],cursor:null};
     });
     await expect(pollComments(runtime, runtime.db)).rejects.toBeInstanceOf(ConnectionChangedError);
     for (const table of deletedTables) expect(await count(db, table)).toBe(0);
@@ -216,7 +217,7 @@ describe("password-confirmed workspace reset", () => {
   });
   it("additive generation migration preserves pre-existing campaigns/auth/contact data", async () => {
     const { db, raw } = makeTestDbWithHandle("0007");
-    await upsertCampaign(db, { ...campaign, match_mode: "keywords", keywords: ["link"] }, true);
+    raw.prepare("INSERT INTO campaigns(campaign_id,platform,media_id,config_json,active,updated_at) VALUES('active','instagram','post',?,1,0)").run(JSON.stringify({...campaign,match_mode:'keywords',keywords:['link']}));
     await db.prepare("INSERT INTO auth (id,access_token,expires_at) VALUES (1,'existing',123)").run();
     applyMigration(raw, "0008_connection_generation.sql");
     expect(await count(db, "campaigns")).toBe(1);

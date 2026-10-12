@@ -24,7 +24,8 @@
     "test:ui": "npm run deploy:dry-run && node scripts/test-ui.mjs",
     "build:ui": "vite build --config frontend/vite.config.ts",
     "dev:ui": "vite --config frontend/vite.config.ts",
-    "typecheck:ui": "tsc --project frontend/tsconfig.json --noEmit"
+    "typecheck:ui": "tsc --project frontend/tsconfig.json --noEmit",
+    "test:worker-reliability": "node scripts/test-worker-reliability.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

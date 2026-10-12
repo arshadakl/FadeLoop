@@ -1,5 +1,7 @@
 # FadeLoop
 
+> **Reliability migration:** This release starts sending disabled. Existing installations must follow the [maintenance cutover and recovery guide](docs/reliability.md) before applying migrations 0009 and 0010. Keep production sends disabled until the staging and provider-contract checks pass.
+
 Self-hosted Instagram **comment-to-DM** automation, using the **official Meta Instagram API only** — no scraping, no unofficial access. When someone comments a keyword on your post or reel, FadeLoop DMs them, optionally asks them to follow, optionally captures their email, then delivers a link or reward.
 
 You clone this repo, create your own Meta app, connect your own Instagram account, and deploy your own instance on Cloudflare. **The author hosts nothing and stores none of your data.** Email/password authentication requires verification against your Cloudflare CPU limits; see [authentication setup](docs/authentication.md).
@@ -631,7 +633,7 @@ curl -X POST https://fadeloop.abc123.workers.dev/config/import \
 
 Your automation is now live. With step 3.5 done, Meta pushes each new comment to you the moment it happens, so the DM goes out within a second or two. The once-a-minute cron keeps running underneath as a safety net, catching anything a push delivery drops. Comment a keyword from a **second** test account and you'll get: opening DM → (follow gate) → (email ask) → reward, per your toggles.
 
-> ✅ **Final end-to-end verification, before you consider this ready to show anyone else:** comment your keyword from the second account and confirm the opening DM lands within a second or two (if it consistently takes ~60 seconds, push isn't arriving and the cron is doing the work — see [Part 6](#part-6--confirm-instant-delivery-is-on)), and that it lands in that account's **Requests** folder (not Primary — that's expected for a first-time commenter, see the postback-button note under [How it works](#how-it-works)). Then work through the full funnel yourself (tap the button → follow-gate if enabled → email-ask if enabled → reward) and check the **Dashboard** tab shows those events incrementing in real time. If the DM never arrives, re-check the Publish step (3.7) first — an empty comments feed is the most common cause, not a config mistake in the campaign itself.
+> ✅ **Final end-to-end verification, before you consider this ready to show anyone else:** comment your keyword from the second account and confirm the opening DM lands within a second or two (if it consistently takes ~three minutes, push isn't arriving and the cron is doing the work — see [Part 6](#part-6--confirm-instant-delivery-is-on)), and that it lands in that account's **Requests** folder (not Primary — that's expected for a first-time commenter, see the postback-button note under [How it works](#how-it-works)). Then work through the full funnel yourself (tap the button → follow-gate if enabled → email-ask if enabled → reward) and check the **Dashboard** tab shows those events incrementing in real time. If the DM never arrives, re-check the Publish step (3.7) first — an empty comments feed is the most common cause, not a config mistake in the campaign itself.
 
 ---
 
@@ -662,7 +664,7 @@ curl -s -X POST -b .fadeloop-cookies -H "Origin: https://fadeloop.abc123.workers
 
 Disconnecting and reconnecting from the dashboard does the same thing.
 
-#### 6.2 — If DMs still take ~60 seconds
+#### 6.2 — If DMs still take ~three minutes
 
 That's the signal push isn't arriving and the cron is covering for it. In order of likelihood:
 
@@ -672,7 +674,7 @@ That's the signal push isn't arriving and the cron is covering for it. In order 
 4. **The app isn't published** — step 3.7. In Development mode Instagram returns empty lists
    rather than errors, so nothing looks broken.
 
-Nobody is lost while you sort this out. The cron is still polling every 60 seconds underneath, so
+Nobody is lost while you sort this out. The cron is still polling every three minutes underneath, so
 leads keep being answered — just slower.
 
 #### 6.3 — Do not change `MODE`
@@ -685,18 +687,20 @@ processed the moment they arrive under either setting. `MODE` only controls how 
 underneath.
 
 `MODE = "polling"` plus a registered callback URL is not a half-measure — it is the best available
-configuration, and it is what this guide sets up. Push makes delivery instant; the 60-second poll
+configuration, and it is what this guide sets up. Push makes delivery instant; the three-minute poll
 stays underneath as a safety net. Webhooks are fire-and-forget: Meta retries a delivery a few times
 and then gives up, so a redeploy or a brief blip would otherwise lose those leads with nothing to
 notice. Running both is safe, because an already-handled comment is recognised and skipped rather
 than DMed twice.
 
 Switching to `MODE = "webhook"` makes nothing faster. It only makes that safety net 15× slower — if
-push ever breaks, you'd wait 15 minutes to find out instead of 60 seconds.
+push ever breaks, you'd wait 15 minutes to find out instead of three minutes.
 
 ---
 
 ## Updating an existing install
+
+**For migrations 0009 and 0010, follow [the reliability cutover guide](docs/reliability.md), including the maintenance bridge, before the general update instructions below.**
 
 Already running FadeLoop and want the newest version? You do **not** need to redo Setup. This takes
 about five minutes.
@@ -859,17 +863,22 @@ to confirm. Five minutes, and DMs land in a second or two instead of up to sixty
 - **Each button carries its own campaign — when the press arrives by webhook.** Push delivers the postback payload, so a press says which automation it belongs to, and someone who commented on two of your posts and has two funnels open advances only the funnel whose button they pressed. Polling never sees the payload, so a press received that way is indistinguishable from a typed reply. A *typed* reply carries no such information either way and still advances every open funnel — Instagram doesn't say which one it answers, and there is nothing to infer it from.
 - **Email capture** uses Instagram's native `user_email` quick-reply chip, with a typed-reply fallback — an address is pulled out of a longer sentence if need be, and the reward is only ever sent once a real one is captured. A reply that isn't an address gets re-asked, but **at most twice**: repeatedly DMing someone who isn't engaging is the pattern platform spam detection looks for, and attachments count too, since a photo or sticker arrives with no text. Hitting the cap only stops the nudging — an address sent later is still captured and still delivers.
 - **Idempotent everywhere**, including across overlapping poll invocations. A comment is processed exactly once and a person gets exactly one DM per campaign, even across re-polls, webhook retries, or an overlapping cron tick racing a manual `/admin/poll` call.
-- **Rate-safe.** Sends are paced with a throttle + exponential backoff on 429s, plus a conservative account-wide hourly cap on opening DMs.
+- **Rate-safe & Cloudflare Free-Tier Budgeted (<= 10ms CPU).** Durable inbox/outbox jobs coordinate account and recipient attempt limits without bursting CPU quotas:
+  - **Native WebCrypto PBKDF2:** Authentication uses zero-WASM WebCrypto `PBKDF2-SHA256` (100,000 iterations), dropping CPU time from 50–150ms to <1.5ms and fitting safely within Cloudflare Free tier limits. Legacy `$argon2id$` hashes are verified backwards-compatibly and upgraded to `pbkdf2$` upon owner login.
+  - **High-Performance Composite Indexes (0011):** Composite indexes (`idx_inbound_events_dispatch`, `idx_outbound_jobs_dispatch`, `idx_send_attempts_rate_limit`, `idx_send_attempts_dispatched_at`) eliminate table scans on correlated queue queries and rate aggregations.
+  - **Bounded Webhook Fast-Path:** Webhook ingestion verifies signatures via native WebCrypto HMAC in <0.5ms, persists to D1, returns `200 OK` immediately, and schedules a bounded `drain(2)` fast-path via `ctx.waitUntil` so burst events never trip CPU limits.
+  - **Nightly Retention Pruning:** An automated maintenance sweep running inside the `0 3 * * *` cron purges send attempts older than 24h, completed events older than 7d, and audit logs older than 30d.
+  - **Meta Graph API Compliance:** Enforces strict 24h/7d messaging window cancellation (expired jobs are permanently cancelled rather than rescheduled) and attaches required `messaging_type: "RESPONSE"` tags to all direct Send API calls.
 - **Instant delivery does not depend on `MODE`.** If a callback URL is registered in your Meta app, pushed events are verified and handed to the engine the moment they arrive — whatever `MODE` is set to. Every request is authenticated against an `X-Hub-Signature-256` HMAC of your app secret; unsigned or mis-signed requests are rejected. Push also carries the postback payload, which polling never sees.
-  - **`MODE` governs the cron, and only the cron.** `"polling"` polls every `POLL_INTERVAL_SECONDS` — `wrangler.toml` ships `60`, which is as fast as polling goes, since Cloudflare crons fire at most once a minute. (Delete the line and the code falls back to `90`; values below `30` are floored at `30`.) `"webhook"` drops the cron to the slower `WEBHOOK_RECONCILE_SECONDS` sweep (900 by default; `"off"` disables it). Neither setting decides whether pushed events are processed.
-  - **The best setup for most people is `MODE = "polling"` *plus* a configured callback URL.** Push makes delivery instant; the 60-second poll sits underneath and catches anything a delivery drops. Webhooks are fire-and-forget — Meta retries a few times and then gives up, so a redeploy or a brief error loses those leads with nothing to notice. Running both is safe: the idempotency ledgers recognise an already-handled comment and skip it.
+  - **`MODE` governs the cron, and only the cron.** `"polling"` polls every `POLL_INTERVAL_SECONDS` — `wrangler.toml` ships `180` to reduce reconciliation work; the minute cron still resumes durable jobs between polls. (Delete the line and the code falls back to `90`; values below `30` are floored at `30`.) `"webhook"` drops the cron to the slower `WEBHOOK_RECONCILE_SECONDS` sweep (900 by default; `"off"` disables it). Neither setting decides whether pushed events are processed.
+  - **The best setup for most people is `MODE = "polling"` *plus* a configured callback URL.** Push makes delivery instant; the three-minute poll sits underneath and catches anything a delivery drops. Webhooks are fire-and-forget — Meta retries a few times and then gives up, so a redeploy or a brief error loses those leads with nothing to notice. Running both is safe: the idempotency ledgers recognise an already-handled comment and skip it.
   - Three things must line up before push works at all: the `WEBHOOK_VERIFY_TOKEN` secret, the callback URL registered in the Meta dashboard, and the **account** subscribed to the app. FadeLoop subscribes the account for you every time you connect Instagram, whatever `MODE` says; `GET /admin/webhook` reports whether it took.
-  - Switch `MODE` to `"webhook"` only once push is confirmed working, and know the tradeoff: it makes the safety net roughly 15× slower. If push ever breaks, you wait 15 minutes to find out instead of 60 seconds.
+  - Switch `MODE` to `"webhook"` only once push is confirmed working, and know the tradeoff: it makes the safety net roughly 5× slower. If push ever breaks, you wait 15 minutes to find out instead of three minutes.
 - **Archiving is non-destructive.** It stops a campaign and hides it from the main list without deleting its history — unlike Delete, which cascades and removes everything permanently.
 
-## Cost
+## Cost & Cloudflare Free Tier
 
-Hosting cost depends on the Cloudflare plan that supports your authentication CPU usage and automation traffic. Argon2id login needs target-plan verification before deployment; this version does not promise $0/month. See [authentication setup](docs/authentication.md) and [Cloudflare limits](https://developers.cloudflare.com/workers/platform/limits/).
+FadeLoop is architected specifically to run comfortably within the **Cloudflare Workers Free Tier** (10ms CPU time per invocation, 100,000 requests/day, 5M D1 reads/day, 100K D1 writes/day). The elimination of WASM runtimes in favor of V8 C++ WebCrypto primitives and composite SQLite indexing ensures low-traffic comment automations incur $0/month in hosting costs. For details, see [reliability & performance](docs/reliability.md) and [Cloudflare limits](https://developers.cloudflare.com/workers/platform/limits/).
 
 ## Development
 
@@ -902,7 +911,7 @@ src/
   auth/               OAuth onboarding + token refresh
   engine/             transport-agnostic state machine (match, transitions, engine)
   poller/             comment + message polls
-  queue/              rate-limit send queue (throttle + backoff)
+  queue/              compatibility pacing helper (durable dispatcher owns retries)
   routes/             auth, api (UI), config import/export, webhook, http helpers
 frontend/             React UI, shared components, themes, and static legal pages
 dist/ui/              compiled assets served by Wrangler (generated, gitignored)

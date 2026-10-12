@@ -1,3 +1,4 @@
+import {buttonPress} from './helpers/buttonPress';
 // End-to-end funnel scenarios, run against the real Engine + real migrations in SQLite.
 //
 // Unlike the unit tests, these are written to be READ: each one prints the conversation exactly as
@@ -140,7 +141,8 @@ class Sim {
   /** Someone taps a button, delivered as a postback payload (webhook mode only). */
   async taps(person: string, label: string, payload: string) {
     say(`\n  @${person} taps [ ${label} ]   → payload ${payload}`);
-    await this.drain(() => this.engine.handleMessage({ kind: "message", igsid: person, payload, timestamp: (this.clock += 5) }));
+    const event=await buttonPress(this.db,{ kind: "message", igsid: person, payload, timestamp: (this.clock += 5) });
+    await this.drain(() => this.engine.handleMessage(event));
   }
 
   /** Instagram's native email chip hands the address over directly. */
@@ -241,9 +243,9 @@ describe("2 · button tap vs typed reply", () => {
     const sim = new Sim("SCENARIO 2A — tapping the button, webhook mode", "The payload identifies the tap exactly.");
     await sim.campaign(campaign({ check_follow: true }));
     await sim.comments("kit", "LINK");
-    await sim.taps("kit", "Send it to me", "OPENING_TAP");
+    await sim.taps("kit", "Send it to me", "OPENING_TAP:c1");
     expect(await sim.state("kit")).toBe("AWAITING_FOLLOW");
-    await sim.taps("kit", "✅ I followed", "FOLLOW_CONFIRM");
+    await sim.taps("kit", "✅ I followed", "FOLLOW_CONFIRM:c1");
     expect(await sim.state("kit")).toBe("DONE");
   });
 
@@ -305,12 +307,11 @@ describe("3 · comments that should not trigger", () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe("4 · the same person, more than once", () => {
   it("two comments on the SAME post = one DM", async () => {
-    const sim = new Sim("SCENARIO 4A — they comment twice on one post", "Enthusiasm must not mean two DMs.");
-    await sim.campaign(campaign());
-    await sim.comments("dana", "LINK");
-    await sim.comments("dana", "LINK please!!");
-    expect(sim.received()).toBe(1);
-    sim.note("Second comment matched, but they already have a conversation — no second DM.");
+    const sim=new Sim('One automation per post','Reject competing active campaign');
+    await sim.campaign(campaign({campaign_id:'c1',media_id:'reel_1'}));
+    await expect(sim.campaign(campaign({campaign_id:'c2',media_id:'reel_1'}))).rejects.toThrow(/UNIQUE/);
+    const id=await sim.comments('hal','LINK');await sim.repoll('hal','LINK',id);
+    expect(sim.received()).toBe(1);expect(await sim.state('hal','c2')).toBeNull();
   });
 
   it("the poller re-reading a comment sends nothing new", async () => {
@@ -376,6 +377,7 @@ describe("4 · the same person, more than once", () => {
     );
     await sim.campaign(campaign({ campaign_id: "c1", media_id: "reel_1", keywords: ["LINK"] }));
     await sim.comments("uma", "LINK", "reel_1");
+    await sim.db.prepare("INSERT INTO legacy_campaign_instances SELECT campaign_id,instance_id FROM campaigns").run();
     await sim.taps("uma", "Send it to me", "OPENING_TAP"); // no campaign id — the old format
     expect(await sim.state("uma", "c1")).toBe("DONE");
     sim.note("✅ Recognised and honoured, falling back to the old advance-everything behavior.");
@@ -397,48 +399,19 @@ describe("4 · the same person, more than once", () => {
   });
 
   it("★ two campaigns on the SAME post, one comment matching both", async () => {
-    const sim = new Sim(
-      "SCENARIO 4E — ★ one comment, two campaigns on the same video",
-      "Easy to set up by accident: two automations watching one post with overlapping keywords.",
-    );
-    await sim.campaign(campaign({ campaign_id: "c1", media_id: "reel_1", keywords: ["LINK"] }));
-    await sim.campaign(campaign({ campaign_id: "c2", media_id: "reel_1", keywords: ["GUIDE"], reward: { type: "link", value: "https://example.com/other" } }));
-
-    await sim.comments("hal", "send me the LINK and the GUIDE");
-    sim.note(`One comment → ${sim.received()} opening DMs, back to back, from a single comment.`);
-    expect(sim.received()).toBe(2);
-
-    await sim.taps("hal", "Send it to me", "OPENING_TAP:c1");
-    sim.note(`Then one PRESS → ${sim.received()} DMs total.`);
-    expect(await sim.state("hal", "c1")).toBe("DONE");
-    expect(await sim.state("hal", "c2")).toBe("AWAITING_TAP");
-    sim.note("Only the funnel whose button they actually pressed. The other still waits for its own.");
+    const sim=new Sim('One automation per post','Reject competing active campaign');
+    await sim.campaign(campaign({campaign_id:'c1',media_id:'reel_1'}));
+    await expect(sim.campaign(campaign({campaign_id:'c2',media_id:'reel_1'}))).rejects.toThrow(/UNIQUE/);
+    const id=await sim.comments('hal','LINK');await sim.repoll('hal','LINK',id);
+    expect(sim.received()).toBe(1);expect(await sim.state('hal','c2')).toBeNull();
   });
 
   it("★ 4E with Instagram's real once-per-comment rule applied", async () => {
-    const sim = new Sim(
-      "SCENARIO 4F — ★ 4E again, but Instagram enforces its actual rule",
-      "A comment can be privately replied to ONCE. The second opening cannot be sent.",
-    );
-    sim.client.enforceOncePerComment = true;
-    await sim.campaign(campaign({ campaign_id: "c1", media_id: "reel_1", keywords: ["LINK"] }));
-    await sim.campaign(campaign({ campaign_id: "c2", media_id: "reel_1", keywords: ["GUIDE"], reward: { type: "link", value: "https://example.com/other" } }));
-
-    const id = await sim.comments("ida", "send me the LINK and the GUIDE");
-    expect(await sim.state("ida", "c1")).toBe("AWAITING_TAP");
-    expect(await sim.state("ida", "c2")).toBeNull();
-    sim.note("c1 got its DM. c2's was refused — correct so far, nothing was delivered twice.");
-
-    // A rejection is treated as retryable, so the comment is deliberately left unprocessed.
-    expect(await isCommentProcessed(sim.db, id)).toBe(false);
-
-    for (let i = 0; i < 3; i++) await sim.repoll("ida", "send me the LINK and the GUIDE", id);
-
-    sim.note(`After 3 more polls, comment still unprocessed: ${!(await isCommentProcessed(sim.db, id))}`);
-    sim.note("⚠️  This never resolves. Instagram will refuse that second private reply forever, so the");
-    sim.note("   comment is retried on EVERY poll, indefinitely — a permanent hot loop burning API calls.");
-    expect(await isCommentProcessed(sim.db, id)).toBe(false);
-    expect(await sim.state("ida", "c2")).toBeNull();
+    const sim=new Sim('One automation per post','Reject competing active campaign');
+    await sim.campaign(campaign({campaign_id:'c1',media_id:'reel_1'}));
+    await expect(sim.campaign(campaign({campaign_id:'c2',media_id:'reel_1'}))).rejects.toThrow(/UNIQUE/);
+    const id=await sim.comments('hal','LINK');await sim.repoll('hal','LINK',id);
+    expect(sim.received()).toBe(1);expect(await sim.state('hal','c2')).toBeNull();
   });
 });
 
@@ -528,18 +501,12 @@ describe("8 · public replies", () => {
 
 // ────────────────────────────────────────────────────────────────────────────
 describe("9 · when Instagram misbehaves", () => {
-  it("a rejected send retries cleanly next poll", async () => {
-    const sim = new Sim("SCENARIO 9A — Instagram rejects the opening DM", "Nothing was delivered, so retrying is safe.");
-    await sim.campaign(campaign());
-    sim.client.failNext.privateReply = 1;
-    const id = await sim.comments("lex", "LINK");
-    expect(await sim.state("lex")).toBeNull();
-    sim.note("No conversation created, nothing logged — the lead is not lost.");
-
-    await sim.repoll("lex", "LINK", id);
-    expect(await sim.state("lex")).toBe("AWAITING_TAP");
-    sim.note("Next poll retried it and it went out. One DM total, not zero, not two.");
-    expect(sim.received()).toBe(1);
+  it("an ambiguous provider failure is held for owner review", async () => {
+    const sim=new Sim('Uncertain send','No blind retry');
+    await sim.campaign(campaign());sim.client.failNext.privateReply=1;
+    const id=await sim.comments('lex','LINK');await sim.repoll('lex','LINK',id);
+    expect(await sim.state('lex')).toBe('NEW');expect(sim.received()).toBe(0);
+    expect(await sim.db.prepare("SELECT status,attempts FROM outbound_jobs").first()).toMatchObject({status:'unknown',attempts:1});
   });
 
   it("a send that delivered but reported failure is NOT sent twice", async () => {

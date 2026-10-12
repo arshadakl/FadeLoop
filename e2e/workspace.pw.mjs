@@ -13,8 +13,8 @@ const media = {
   ],
 };
 
-async function signIn(page) {
-  await page.route("**/api/media", (route) => route.fulfill({ json: media }));
+async function signIn(page,availableMedia=media) {
+  await page.route("**/api/media", (route) => route.fulfill({ json: availableMedia }));
   await page.goto("/");
   await page.getByLabel("Email address").fill("owner@example.com");
   await page.getByLabel("Password", { exact: true }).fill(password);
@@ -222,12 +222,12 @@ test("mobile campaign save, activation, archive, restore, delete and draft prote
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 850 });
-  await signIn(page);
+  await signIn(page,{media:[...media.media,{...media.media[0],id:'media-mobile',caption:'Mobile guide'}]});
   await page
     .getByRole("button", { name: "New automation", exact: true })
     .click();
   await page.getByLabel("Automation name").fill("Mobile test automation");
-  await page.getByRole("button", { name: "Select post Creator guide" }).click();
+  await page.getByRole("button", { name: "Select post Mobile guide" }).click();
   await page.getByLabel("Keywords (comma separated)").fill("MOBILE");
   await page.getByLabel("Link or reward").fill("https://example.com/mobile");
   await page.getByRole("button", { name: /^Save/ }).click();

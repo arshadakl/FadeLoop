@@ -20,7 +20,9 @@ class FakeStmt {
     this.params = args;
     return this;
   }
-  async run(): Promise<{ meta: { changes: number } }> {
+  async run(): Promise<{ meta: { changes: number }; results?: unknown[] }> {
+    // D1 returns result rows for UPDATE ... RETURNING even through batch().
+    if(this.stmt.columns().length){const results=this.stmt.all(...(this.params as never[]));return {meta:{changes:results.length},results};}
     const r = this.stmt.run(...(this.params as never[]));
     return { meta: { changes: Number(r.changes) } };
   }
@@ -58,7 +60,12 @@ class FakeD1 {
  * code meets an older schema, which is the failure mode a deploy actually risks.
  */
 export function makeTestDb(upTo?: string): D1Database {
-  return makeTestDbWithHandle(upTo).db;
+  const {db,raw}=makeTestDbWithHandle(upTo);
+  // Engine fixtures opt into sending and omit real-time pacing. Migration fixtures below
+  // retain the production default (disabled); rate limits are still enforced.
+  if(raw.prepare("SELECT 1 FROM sqlite_master WHERE name='automation_control'").get())
+    raw.exec('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0');
+  return db;
 }
 
 /** As makeTestDb, but also returns the raw handle so a test can apply a migration mid-flight. */

@@ -16,17 +16,19 @@ const event = (over: Partial<NormalizedComment> = {}): NormalizedComment => ({ k
 describe("Any comment eligibility", () => {
   it("polling skips missing/invalid/old timestamps and deduplicates new comments", async () => {
     const { db } = makeTestDbWithHandle();
+    await db.prepare('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0').run();
     await upsertCampaign(db, campaign({ match_mode: "any", keywords: [] }), true);
     const client = new FakeClient();
     const engine = new Engine(db, client as never, new SendQueue({ minIntervalMs: 0, maxRetries: 0 }));
-    const runtime = { engine, client: Object.assign(client, { getComments: async () => [
+    const runtime = { engine, auth:{connection_generation:0},igUserId:"owner",client: Object.assign(client, { getCommentsPage: async () => ({data:[
       { id: "missing", text: "👋", from: { id: "a" } },
       { id: "bad", text: "👋", from: { id: "b" }, timestamp: "invalid" },
       { id: "old", text: "👋", from: { id: "c" }, timestamp: new Date(Date.now() - 60_000).toISOString() },
       { id: "new", text: "👋", from: { id: "d" }, timestamp: new Date(Date.now() + 1000).toISOString() },
-    ] }) } as unknown as Runtime;
+    ],cursor:null}) }) } as unknown as Runtime;
     await pollComments(runtime, db);
     await pollComments(runtime, db);
+    await engine.drain();
     expect(client.calls.privateReply).toHaveLength(1);
   });
   it("keeps legacy validation and rejects unsupported modes", () => {
@@ -38,6 +40,7 @@ describe("Any comment eligibility", () => {
   });
   it("ignores caller timestamps, preserves boundaries on save, resets on mode switches/reactivation/restore", async () => {
     const { db } = makeTestDbWithHandle();
+    await db.prepare('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0').run();
     const clock = vi.spyOn(Date, "now");
     try {
       clock.mockReturnValue(100_000);
@@ -62,6 +65,7 @@ describe("Any comment eligibility", () => {
   });
   it("accepts emoji and text, excludes whole words, and skips old/undated/empty/wrong-media comments", async () => {
     const { db } = makeTestDbWithHandle();
+    await db.prepare('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0').run();
     await upsertCampaign(db, campaign({ match_mode: "any", keywords: [], exclude: ["fake"] }), true);
     const client = new FakeClient();
     const engine = new Engine(db, client as never, new SendQueue({ minIntervalMs: 0, maxRetries: 0 }));
@@ -94,7 +98,7 @@ describe("folder organization and additive migration", () => {
   });
   it("preserves existing configuration and authentication rows", async () => {
     const { db, raw } = makeTestDbWithHandle("0006");
-    await upsertCampaign(db, campaign(), true);
+    raw.prepare("INSERT INTO campaigns(campaign_id,platform,media_id,config_json,active,updated_at) VALUES('c1','instagram','m1',?,1,0)").run(JSON.stringify(campaign()));
     raw.exec("INSERT INTO auth (id, access_token, expires_at) VALUES (1, 'fixture', 123)");
     raw.exec("INSERT INTO conversations (igsid, campaign_id, state, created_at, updated_at) VALUES ('person', 'c1', 'AWAITING_TAP', 10, 20)");
     raw.exec("INSERT INTO events (campaign_id, igsid, type, created_at) VALUES ('c1', 'person', 'opening_sent', 20)");
@@ -107,6 +111,7 @@ describe("folder organization and additive migration", () => {
   });
   it("creates, renames, moves, filters via membership, retains archive membership, and deletes only folders", async () => {
     const { db } = makeTestDbWithHandle();
+    await db.prepare('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0').run();
     await upsertCampaign(db, campaign(), true);
     const env = { DB: db } as Env;
     const post = (path: string, body: object) => folders(env, new Request("https://test" + path, { method: "POST", body: JSON.stringify(body) }), path);

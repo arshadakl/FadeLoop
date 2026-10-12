@@ -1,135 +1,74 @@
-// Deploying is two steps — migrate the database, then publish the code — and the order is not a
-// style choice. These tests pin down what each ordering actually does, because the wrong one fails
-// silently rather than loudly, and silence is what makes it expensive.
-
-import { describe, expect, it } from "vitest";
-import { Engine } from "../src/engine/engine";
-import { SendQueue } from "../src/queue/queue";
-import { getConversation, upsertCampaign } from "../src/db";
-import type { Campaign, NormalizedComment, NormalizedMessage } from "../src/types";
-import { applyMigration, makeTestDbWithHandle } from "./helpers/fakeD1";
-import { FakeClient } from "./helpers/fakeClient";
-
-const T = Math.floor(Date.now() / 1000);
-const fast = () => new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 });
-
-/** Pin the funnel migration these regression cases exercise; auth migrations add no funnel columns. */
-const PREVIOUS = "0004_email_retries";
-const LATEST = "0005_tap_retries.sql";
-
-function campaign(over: Partial<Campaign> = {}): Campaign {
-  return {
-    campaign_id: "c1", media_id: "m1", keywords: ["LINK"], exclude: [],
-    reward: { type: "link", value: "https://x.com/g" },
-    copy: { opening: "tap", opening_button: "Go", delivery: "here {reward}" },
-    ...over,
-  };
+import {describe,it,expect} from 'vitest';
+import {Engine} from '../src/engine/engine';
+import {SendQueue} from '../src/queue/queue';
+import {makeTestDbWithHandle,applyMigration} from './helpers/fakeD1';
+import {FakeClient} from './helpers/fakeClient';
+import {upsertCampaign} from '../src/db';
+import {handleAutomation} from '../src/reliability/status';
+import type {Env,Campaign} from '../src/types';
+const campaign:Campaign={campaign_id:'c1',media_id:'m1',keywords:['link'],check_follow:true,reward:{type:'text',value:'resource'},copy:{opening:'Tap',delivery:'Here {reward}'}};
+function previous(){
+ const f=makeTestDbWithHandle('0008');
+ f.raw.prepare("INSERT INTO campaigns(campaign_id,media_id,config_json,active,updated_at) VALUES('c1','m1',?,1,10)").run(JSON.stringify(campaign));
+ f.raw.exec("INSERT INTO conversations(igsid,campaign_id,state,created_at,updated_at) VALUES('u1','c1','AWAITING_TAP',10,20); INSERT INTO send_claims VALUES('opening:c1:u1',10); INSERT INTO auth(id,access_token,expires_at) VALUES(1,'preserved',9999999999)");
+ return f;
 }
-const comment = (o: Partial<NormalizedComment> = {}): NormalizedComment =>
-  ({ kind: "comment", comment_id: "cm1", igsid: "u1", username: "u1", text: "LINK", media_id: "m1", timestamp: T, ...o });
-const msg = (o: Partial<NormalizedMessage> = {}): NormalizedMessage =>
-  ({ kind: "message", igsid: "u1", timestamp: T + 100, ...o });
-
-/**
- * Insert a conversation the way the PREVIOUS schema did.
- * Deliberately raw rather than via createConversation: that helper belongs to the new code and
- * names the new column, so it cannot write to the schema we are pretending is already deployed.
- */
-function seedOldRow(raw: ReturnType<typeof makeTestDbWithHandle>["raw"], igsid: string, state: string, at = T - 600) {
-  raw.prepare(
-    `INSERT INTO conversations (igsid, campaign_id, state, username, followed, follow_retries, updated_at, created_at)
-     VALUES (?, 'c1', ?, ?, 0, 0, ?, ?)`,
-  ).run(igsid, state, igsid, at, at);
-}
-
-describe("migrating an existing database", () => {
-  it("rows written by the previous schema survive, and pick up the new column's default", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS);
-    await upsertCampaign(db, campaign(), true);
-    for (const [igsid, state] of [["a", "AWAITING_TAP"], ["b", "AWAITING_FOLLOW"], ["c", "DONE"]] as const) {
-      seedOldRow(raw, igsid, state);
-    }
-    const before = raw.prepare("SELECT igsid, state, updated_at FROM conversations ORDER BY igsid").all();
-
-    applyMigration(raw, LATEST);
-
-    const after = raw.prepare("SELECT igsid, state, updated_at, email_retries FROM conversations ORDER BY igsid").all() as Array<Record<string, unknown>>;
-    expect(after).toHaveLength(before.length);
-    after.forEach((row, i) => {
-      const was = before[i] as Record<string, unknown>;
-      expect(row.state).toBe(was.state);        // nobody moved
-      expect(row.updated_at).toBe(was.updated_at); // nobody's clock was touched
-      expect(row.email_retries).toBe(0);        // and everyone picked up the default
-    });
-    expect(raw.prepare("SELECT COUNT(*) AS n FROM conversations WHERE email_retries IS NULL").get()).toMatchObject({ n: 0 });
-  });
-
-  it("people mid-funnel still complete afterwards, and nobody is messaged twice", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS);
-    const client = new FakeClient();
-    await upsertCampaign(db, campaign({ check_follow: true }), true);
-    const engine = new Engine(db, client as never, fast());
-
-    // They were sent their opening by the OLD code, and are sitting in AWAITING_TAP.
-    seedOldRow(raw, "u1", "AWAITING_TAP");
-    applyMigration(raw, LATEST); // ← the deploy's migration
-
-    // The button already in their inbox carries an untagged payload; it must still work.
-    await engine.handleMessage(msg({ payload: "OPENING_TAP" }));
-    await db.prepare("UPDATE conversations SET updated_at = ?").bind(T - 600).run();
-    await engine.handleMessage(msg({ timestamp: T + 200, payload: "FOLLOW_CONFIRM" }));
-
-    expect((await getConversation(db, "u1", "c1"))?.state).toBe("DONE");
-    const sends = [...client.calls.button, ...client.calls.text];
-    expect(sends).toHaveLength(2); // gate, then delivery — one each, no repeats
-  });
-});
-
-describe("deploying BEFORE migrating — why the order matters", () => {
-  it("the person is DMed and then lost: no funnel row, and the comment retries forever", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS); // new code, old schema
-    const client = new FakeClient();
-    await upsertCampaign(db, campaign(), true);
-    const engine = new Engine(db, client as never, fast());
-
-    for (let tick = 0; tick < 3; tick++) {
-      // The column the newest migration adds — update this when a later migration adds another.
-      await expect(engine.handleComment(comment())).rejects.toThrow(/tap_retries/);
-    }
-
-    // They received exactly one DM — so from their side the automation looks like it worked...
-    expect(client.calls.privateReply).toHaveLength(1);
-    // ...but nothing recorded them, so tapping the button can never advance anything,
-    // and the comment is never marked processed, so every poll retries it forever.
-    expect(raw.prepare("SELECT COUNT(*) AS n FROM conversations").get()).toMatchObject({ n: 0 });
-    expect(raw.prepare("SELECT COUNT(*) AS n FROM processed_comments").get()).toMatchObject({ n: 0 });
-
-    await engine.handleMessage(msg({ payload: "OPENING_TAP" }));
-    expect(client.calls.privateReply).toHaveLength(1); // still nothing; they are stranded
-  });
-
-  it("existing conversations are unaffected — the damage is confined to new leads", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS);
-    const client = new FakeClient();
-    await upsertCampaign(db, campaign(), true);
-    seedOldRow(raw, "u1", "AWAITING_TAP");
-
-    const engine = new Engine(db, client as never, fast());
-    await engine.handleMessage(msg({ payload: "OPENING_TAP" }));
-    expect((await getConversation(db, "u1", "c1"))?.state).toBe("DONE");
-    expect(client.calls.text).toHaveLength(1);
-  });
-});
-
-describe("migrating BEFORE deploying — always safe", () => {
-  it("the migration is additive, so a database ahead of the code changes nothing", async () => {
-    const { db, raw } = makeTestDbWithHandle(); // fully migrated
-    const client = new FakeClient();
-    await upsertCampaign(db, campaign(), true);
-    await new Engine(db, client as never, fast()).handleComment(comment());
-
-    const row = raw.prepare("SELECT email_retries FROM conversations WHERE igsid = 'u1'").get();
-    expect(row).toMatchObject({ email_retries: 0 });
-    expect(client.calls.privateReply).toHaveLength(1);
-  });
+describe('reliability cutover',()=>{
+ it('0010 repairs terminal references, preserves intent and holds lost retry deadlines',async()=>{
+  const {db,raw}=makeTestDbWithHandle('0009');await upsertCampaign(db,campaign,true);
+  raw.exec(`INSERT INTO conversations(igsid,campaign_id,state,created_at,updated_at,pending_job_id) VALUES
+    ('rejected','c1','NEW',10,10,'rejected'),('closed','c1','AWAITING_TAP',10,10,'closed'),('retry','c1','NEW',10,10,'retry'),('completed','c1','DONE',10,10,NULL);
+    INSERT INTO inbound_events(id,generation,recipient,source,event_ms,content_json,created_at) VALUES('original',0,'rejected','fixture',5000,'{}',10000);
+    INSERT INTO outbound_jobs(id,generation,campaign_id,campaign_instance,recipient,action,event_id,expected_version,request_json,transition_json,status,resolution_source,attempts,error,created_at,updated_at)
+      SELECT igsid,0,campaign_id,campaign_instance,igsid,'opening','original',0,'{"text":"preserved"}','{}',
+        CASE igsid WHEN 'rejected' THEN 'rejected' WHEN 'closed' THEN 'cancelled' ELSE 'held' END,
+        CASE igsid WHEN 'closed' THEN 'owner_closed_unresolved' ELSE NULL END,1,
+        CASE igsid WHEN 'retry' THEN 'Campaign paused or archived' ELSE NULL END,10000,10000
+      FROM conversations WHERE igsid!='completed';
+    INSERT INTO send_claims VALUES('opaque:preserved',10);UPDATE automation_control SET enabled=1;`);
+  applyMigration(raw,'0010_reliability_repairs.sql');
+  expect(await db.prepare("SELECT lifecycle,pending_job_id,event_boundary_ms FROM conversations WHERE igsid='rejected'").first()).toMatchObject({lifecycle:'failed',pending_job_id:null,event_boundary_ms:5000});
+  expect(await db.prepare("SELECT lifecycle,pending_job_id FROM conversations WHERE igsid='closed'").first()).toMatchObject({lifecycle:'closed',pending_job_id:null});
+  expect(await db.prepare("SELECT lifecycle FROM conversations WHERE igsid='completed'").first()).toMatchObject({lifecycle:'completed'});
+  expect(await db.prepare('SELECT enabled FROM automation_control').first()).toMatchObject({enabled:0});
+  expect(await db.prepare('SELECT COUNT(*) n FROM send_claims').first()).toMatchObject({n:1});
+  const retry=(await db.prepare("SELECT status,next_at,request_json FROM outbound_jobs WHERE id='retry'").first<{status:string;next_at:number;request_json:string}>())!;
+  expect(retry.status).toBe('held');expect(retry.next_at).toBeGreaterThan(Date.now()+86400_000);expect(JSON.parse(retry.request_json).text).toBe('preserved');
+  const req=new Request('https://test/api/automation/resolve',{method:'POST',body:JSON.stringify({job_id:'retry',action:'close_unresolved'})});
+  expect((await handleAutomation({DB:db} as Env,req,new URL(req.url))).status).toBe(200);
+  expect(await db.prepare("SELECT lifecycle,pending_job_id FROM conversations WHERE igsid='retry'").first()).toMatchObject({lifecycle:'closed',pending_job_id:null});
+ });
+ it('preserves credentials, progress and suppression claims and starts disabled',async()=>{
+  const {db,raw}=previous();applyMigration(raw,'0009_reliability.sql');applyMigration(raw,'0010_reliability_repairs.sql');
+  expect(await db.prepare('SELECT state,created_at,updated_at,version,pending_job_id,campaign_instance FROM conversations').first()).toMatchObject({state:'AWAITING_TAP',created_at:10,updated_at:20,version:0,pending_job_id:null,campaign_instance:expect.any(String)});
+  expect(await db.prepare('SELECT access_token FROM auth').first()).toMatchObject({access_token:'preserved'});
+  expect(await db.prepare('SELECT key FROM send_claims').first()).toMatchObject({key:'opening:c1:u1'});
+  expect(await db.prepare('SELECT enabled FROM automation_control').first()).toMatchObject({enabled:0});
+ });
+ it('fails before any external send when the new schema is missing',async()=>{
+  const {db}=previous(),client=new FakeClient(),engine=new Engine(db,client.asClient(),new SendQueue());
+  await expect(engine.handleComment({kind:'comment',comment_id:'new',igsid:'new',media_id:'m1',text:'link',timestamp:Math.floor(Date.now()/1000)})).rejects.toThrow();
+  expect(client.calls.privateReply).toHaveLength(0);
+ });
+ it('retains queued intent until cutover is explicitly enabled',async()=>{
+  const {db,raw}=previous();applyMigration(raw,'0009_reliability.sql');applyMigration(raw,'0010_reliability_repairs.sql');const client=new FakeClient(),engine=new Engine(db,client.asClient(),new SendQueue());
+  await engine.handleComment({kind:'comment',comment_id:'new',igsid:'new',media_id:'m1',text:'link',timestamp:Math.floor(Date.now()/1000)});
+  expect(client.calls.privateReply).toHaveLength(0);expect(await db.prepare('SELECT COUNT(*) n FROM outbound_jobs').first()).toMatchObject({n:1});
+  await db.prepare('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0').run();await db.prepare('UPDATE outbound_jobs SET next_at=0').run();await engine.drain();
+  expect(client.calls.privateReply).toHaveLength(1);
+ });
+ it('legacy in-progress funnels complete without another opening',async()=>{
+  const {db,raw}=previous();applyMigration(raw,'0009_reliability.sql');applyMigration(raw,'0010_reliability_repairs.sql');await db.prepare('UPDATE automation_control SET enabled=1,account_interval_ms=0,recipient_interval_ms=0').run();
+  const client=new FakeClient(),engine=new Engine(db,client.asClient(),new SendQueue());const timestamp=Math.floor(Date.now()/1000);
+  await engine.handleMessage({kind:'message',igsid:'u1',message_id:'a',timestamp,payload:'OPENING_TAP:c1'});
+  await engine.handleMessage({kind:'message',igsid:'u1',message_id:'b',timestamp,payload:'FOLLOW_CONFIRM:c1'});
+  expect(client.calls.privateReply).toHaveLength(0);expect(client.calls.button).toHaveLength(1);expect(client.calls.text).toHaveLength(1);
+  expect(await db.prepare('SELECT state FROM conversations').first()).toMatchObject({state:'DONE'});
+ });
+ it('a legacy downstream claim suppresses automatic replay',async()=>{
+  const {db,raw}=previous();raw.exec("INSERT INTO send_claims VALUES('follow_gate:c1:u1',10)");applyMigration(raw,'0009_reliability.sql');applyMigration(raw,'0010_reliability_repairs.sql');await db.prepare('UPDATE automation_control SET enabled=1').run();
+  const client=new FakeClient(),engine=new Engine(db,client.asClient(),new SendQueue());
+  await engine.handleMessage({kind:'message',igsid:'u1',message_id:'a',timestamp:Math.floor(Date.now()/1000),payload:'OPENING_TAP:c1'});
+  expect(client.calls.button).toHaveLength(0);expect(await db.prepare('SELECT status FROM outbound_jobs').first()).toMatchObject({status:'unknown'});
+ });
 });

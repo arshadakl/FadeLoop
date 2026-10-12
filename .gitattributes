@@ -1,0 +1,2 @@
+# D1 remote migration parsing requires LF line endings for trigger bodies.
+schema/*.sql text eol=lf

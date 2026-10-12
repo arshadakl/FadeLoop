@@ -1,0 +1,78 @@
+# Reliability release and recovery
+
+This release changes the sender and requires migrations `0009_reliability.sql` and `0010_reliability_repairs.sql`. Do not use the older generic “migrate, then deploy” instructions for this cutover. Do not run the original sender against the migrated database: its retries do not consult the new safety controls.
+
+## Operational behavior
+
+Webhook, polling and manual processing persist events before planning messages. D1 commits an immutable request and a conditional conversation transition. A dispatcher atomically authorizes one attempt and reserves the account and recipient budget. Only a provider acknowledgement containing the required ID advances progress and analytics.
+
+Timeouts, network failures, HTTP 5xx, malformed acknowledgements and unclassified failures become **unknown**. There is no automatic replay. Recognized rate rejections receive at most three additional attempts, after 1, 2 and 4 minutes plus jitter, respecting a longer Retry-After. Definitive recipient/validation errors stop that action. Authorization failures hold account sending until reconnection and explicit owner re-enablement.
+
+The safety defaults are FadeLoop limits, not Meta quotas: 180 attempts per rolling hour account-wide; eight DM attempts per recipient per hour; 1.2 seconds between account attempts and two seconds between DM attempts to a recipient. Failures and unknown outcomes consume attempts. Public replies share account capacity. An unknown holds its recipient's thread; three unknowns in ten minutes hold the account. These limits coordinate across invocations in D1. Held jobs remain durable and are reconsidered by cron.
+
+Pause/archive stops subsequent dispatch authorizations, including queued work. An already authorized request may finish. Resume preserves the original request copy and rechecks campaign ownership, conversation version and the snapshot's eligibility deadline. Comments from paused intervals are excluded using a new activation boundary. The resume boundary second is excluded conservatively when comment timestamps cannot establish ordering within that second. One active automation per post is enforced by a partial unique database index, including restore and import. Existing overlaps are all held for owner selection.
+
+New buttons use opaque action tokens. Polling retains message IDs and milliseconds; label fallback requires unambiguous issued-button ownership and a matching expected step. Label echoes cannot advance the next step using the same inbox event. Legacy ambiguous inputs remain pending. Comments with unresolved authors or dates remain pending until reconciliation supplies authoritative metadata; connected-account authors, message echoes and receipts cannot trigger sends.
+
+### Reliability repairs in 0010
+
+Button-label fallback considers retained dispatched button snapshots across completed and deleted campaigns. A postback and its separate label echo cannot advance different campaigns. Reused labels with multiple possible owners remain held; labels attributable only to completed or terminal steps are consumed without sending. Historical labels are not reconstructed from edited copy. Legacy campaign-ID payloads are accepted only for their original mapped instance; a recreated or newly created campaign requires its opaque token. When historical label ownership cannot be established, label fallback remains unavailable.
+
+Conversation creation time is for display. Message eligibility uses the triggering event boundary and exact button ownership, so processing delays do not discard valid replies. Conversations expose a separate lifecycle: active, completed, failed or closed. Definitive rejection and owner closure atomically terminalize the owning version and clear its pending reference while retaining suppression evidence. Later inputs cannot reopen that campaign instance. Public-reply rejection does not close a DM conversation.
+
+Polling leases rotate media and threads by attempt time. Failed reads retain their cursor and use bounded 1/2/4/8/16/30-minute backoff with jitter and a longer provider delay when supplied. Discovery failures do not block known threads. Per-checkpoint failures remain visible until that checkpoint succeeds; success elsewhere does not clear them. Database preflight failures and generation changes are not provider failures.
+
+Pause/archive is a campaign eligibility condition: it does not rewrite a job's status, retry deadline, attempt count or unrelated safety hold. Resume cannot shorten Retry-After. Migration 0010 repairs already terminal conversation references and disables sending. Previously dispatched jobs whose retry deadline was erased by an old pause are held for owner review; the owner may close them unresolved, but cannot resend or confirm them as uncertain sends through this release. Original request snapshots, attempts and legacy claims remain intact.
+
+## Cutover for an existing installation
+
+1. Record the currently deployed version, connection generation, campaign/contact/event/claim counts and polling checkpoints. Export D1 with `npx wrangler d1 export fadeloop --remote --output <backup-file.sql>` and verify the backup. Store backups privately: they contain credentials and customer data.
+2. Build the UI/auth assets with `npm run build:auth` and `npm run build:ui`. Deploy the schema-independent bridge with `npx wrangler deploy src/maintenance-bridge.ts`. This bridge performs no database writes or provider calls and disables scheduled work. Webhooks receive retryable 503 responses; the dashboard is temporarily unavailable. This is an explicit maintenance period.
+3. Verify bridge deployment and drain the old version. Inspect Worker invocation logs and provider activity; do not switch writers while an old sending invocation remains active. Waiting a fixed number of seconds alone is not proof of drainage. Take the final D1 backup after draining and before migration.
+4. Apply `npm run db:migrate:remote` and verify every migration succeeded. `0009` preserves conversations, credentials, analytics and legacy send claims; it backfills instances and version metadata without sending. `0010` backfills event boundaries and lifecycle, repairs terminal references, adds polling failure metadata, and holds unrecoverable retry deadlines without sending. Check that `automation_control.enabled = 0`, the preserved counts match, and all overlapping campaigns appear in `campaign_conflicts`. Do not delete legacy claims or manually mark them successful. Unmapped claims remain suppression evidence; inspect them during owner verification.
+5. Deploy the new main Worker **in maintenance** with `npx wrangler deploy --var AUTOMATION_MAINTENANCE:true`. Confirm the build revision, connection generation, preserved data, disabled sender and owner safety UI. Ingestion can continue durably while sending is held. Reconnect only the same Instagram account; reconnection moves recoverable work to the new generation, preserves attempt accounting and stable event identities, marks abandoned dispatches unknown and leaves sending disabled.
+6. Complete the staging gates below using a separate installation and dedicated Instagram test recipient. Review legacy uncertainty and choose one active automation for each conflicting post. Unknown outcomes require individual review. Any configuration import must validate entirely and fit one transaction; oversized imports return 413 without changes. The default maximum is ten keyword or six Any comment campaigns per import, depending on generated statements.
+7. Deploy with `AUTOMATION_MAINTENANCE=false` explicitly. In the account dialog, open **Automation safety**, verify the cutover checkbox, then enable sending. This is an owner action; deployment never enables the sender automatically. Verify one expected test journey and inspect attempts, confirmed IDs, health and backlog before production traffic proceeds.
+
+Retain both the bridge build and the new held build as rollback targets. For an incident, first use **Stop all sending** or redeploy with `AUTOMATION_MAINTENANCE=true`. If the application cannot run, redeploy the bridge. Do not roll back to the original sender or the pre-0010 main Worker, which does not enforce terminal lifecycle semantics. The additive schema remains in place; restore a backup only in maintenance after reconciling external sends made since that backup. Restoring stale send records can revive already delivered actions.
+
+## Owner recovery and visibility
+
+The account dialog reports connection health and generation, polling completion/errors, last ingestion, oldest pending work, attempts versus confirmed jobs, recipient/account holds, conflicts, and sanitized provider evidence. Review lists are paginated. Build identity can be set with `BUILD_REVISION`; the fallback is `reliability-v2`.
+
+For each unknown job, inspect the corresponding Instagram thread. **I verified receipt** records an audited confirmation and conditionally finalizes its original transition once. **Close unresolved** records an audited closure and suppresses that action permanently. Neither button resends. There is no bulk replay. A correctly correlated new postback can also establish that an uncertain button was received. Never infer delivery from a duplicate claim or a generic successful HTTP status without its required provider ID.
+
+Confirmed/rejected/cancelled job records and legacy claims are retained as suppression evidence after ordinary campaign deletion. A recreated campaign receives a new instance and activation boundary. Do not prune those records casually. Inbox contents, request snapshots and recipients are account data; there is no automatic retention purge in this release. The password-confirmed workspace reset deletes every new account table and resets the sender while preserving owner authentication. Export owner audit records before resetting if needed.
+
+## Local validation
+
+The repaired release passed 296 unit tests, 64 browser tests, type checking, the deployment dry run, and the workerd authentication and reliability suites. The reliability runtime exercised 15 invocations, including full 50-comment and 50-message polling pages, with a maximum of 40 SQL statements. At that budget boundary, fetched pages remain persisted and remaining work is deferred. The separate 100-comment backlog benchmark reached all intended sends, produced zero extra sends on repeated input, and used at most 35 statements per invocation. These are disposable local databases and intercepted provider calls, not proof of deployed CPU/memory headroom or live Meta contracts.
+
+
+- `npm test` — real engine against SQLite with D1-compatible transactional batches, including duplicates, concurrency, uncertainty, bounded retries, pause/resume, stale versions, reconnect, migration and pagination.
+- `npm run typecheck`
+- `npm run deploy:dry-run` — builds the browser, auth module and Worker without deployment.
+- `node scripts/test-worker-reliability.mjs` — disposable workerd/D1 with intercepted provider calls, 501 duplicate events, fail-closed cutover, HTTP 500 uncertainty, rollback/503 and actual SQL counts. Writes `.wrangler/reliability-runtime/results.json`.
+- `node scripts/test-worker-auth.mjs` — deploy bundle in workerd with transactional reset/rollback, sessions, folders and activation metadata.
+- `node scripts/test-ui.mjs` — browser regression suite against disposable local D1.
+
+No local test calls real Instagram. The application caps raw SQL at 40 per invocation, counting connection guards and batch members, reserves outcome-recording budget before dispatch, and shares a 25-second runtime deadline. Provider requests, including body reading, have a maximum 15-second timeout. Inbox and outbox work survives a budget stop; cron rotates ingestion and processing priority every minute, including when reconciliation is disabled. Each poll fetches a bounded page and persists its continuation with the page. Cursor invalidation restarts with overlap and stable deduplication. Polling coverage is limited to what the provider exposes.
+
+The deployment configuration reconciles with Instagram every 180 seconds. The minute cron still resumes durable work, and verified webhook ingestion remains immediate. Polling-only discovery can therefore take three minutes or longer during pagination/backlogs. Identical events within a batch are collapsed before hashing and insertion; richer versions remain available for missing timestamp/recipient repair. Idle drains use one read rather than claiming work or performing recovery writes. Abandoned dispatches and the uncertain-outcome circuit breaker remain eligible for recovery.
+
+### CPU & Storage Optimizations (Migration 0011 & Native WebCrypto)
+- **Zero-WASM Password Verification:** Replaced CPU-heavy Argon2 WASM with native WebCrypto `PBKDF2-SHA256` (100,000 iterations). Authentication CPU drops from 50–150ms down to <1.5ms, safely fitting Cloudflare Free tier CPU limits. Existing `$argon2id$` hashes are verified backwards-compatibly and upgraded automatically to `pbkdf2$` upon owner login.
+- **Queue & Rate Indexing (0011):** Composite indexes `idx_inbound_events_dispatch`, `idx_outbound_jobs_dispatch`, `idx_send_attempts_rate_limit`, and `idx_send_attempts_dispatched_at` eliminate full table scans during correlated queue queries and rate limit aggregations.
+- **Nightly Retention Pruning:** The `0 3 * * *` scheduled cron automatically purges rate limit send attempts older than 24h, processed inbound events older than 7d, and audit records older than 30d, preventing D1 unbounded growth.
+- **Strict 24h/7d Window Enforcement:** Expired outbound jobs are permanently marked `cancelled` with reason `'Messaging window expired'` rather than reschedule loops. Direct DMs include Meta Graph API v23.0 `messaging_type: "RESPONSE"`.
+
+## Required staging gates — not established by local tests
+
+Keep production sending disabled until these pass:
+
+1. Verify the pinned Graph version's private-reply, button-template, quick-reply, text and public-reply acknowledgements, webhook IDs/timestamps, recipient identity and pagination shapes against official documentation and dedicated test-account fixtures. Unsupported response contracts fail closed. Check actual messaging windows; the implementation uses conservative seven-day comment and 24-hour inbound-message snapshot deadlines, which must be verified for the pinned endpoints and permissions.
+2. Test accepted-send timeout, HTTP 500, connection loss, rate rejection with Retry-After, authorization expiry, preparation/dispatch crashes and D1 failure. Confirm unknowns never automatically replay, rejected attempts do not hot-loop, and owner confirmation never duplicates analytics.
+3. Measure deployed Worker CPU, memory, subrequests and D1 queries under full webhook/cron backlogs, concurrent dispatchers and mixed recipients. Local wall time and SQL counts are not deployed CPU/memory evidence. Prove Free-plan compatibility separately; the documented password-hashing CPU limitation still applies.
+4. Verify pause/archive races, same-second/out-of-order events, webhook/poll overlap, legacy claims, more than 60 messages, 20 threads and 50 comments, stale-generation resets, imports/restores, and cutover/bridge rollback preservation.
+
+The production 500+ message incident remains unassigned without deployed-version and incident evidence. The implementation does not promise exactly-once Instagram delivery. It prevents automatic replay of uncertain logical actions and keeps blocked work visible and recoverable without adding Queues, Durable Objects or another hosted service.

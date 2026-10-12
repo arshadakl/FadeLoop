@@ -25,7 +25,7 @@ vi.mock("../src/runtime", async (orig) => {
 const { handleWebhookEvent, handleWebhookVerify, handleWebhookAdmin } = await import("../src/routes/webhook");
 
 const APP_SECRET = "test-app-secret";
-const T = Math.floor(Date.now() / 1000);
+let T = Math.floor(Date.now() / 1000);
 
 function campaign(over: Partial<Campaign> = {}): Campaign {
   return {
@@ -68,6 +68,7 @@ async function envFor(mode: string, over: Partial<Campaign> = {}): Promise<Env> 
   const db = makeTestDb();
   client = new FakeClient();
   await upsertCampaign(db, campaign(over), true);
+  await db.prepare('UPDATE campaigns SET active_since=?').bind(T).run();
   runtime = {
     auth: { connection_generation: 0 },
     engine: new Engine(db, client as never, new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 })),
@@ -76,9 +77,18 @@ async function envFor(mode: string, over: Partial<Campaign> = {}): Promise<Env> 
   return { DB: db, MODE: mode, APP_SECRET, WEBHOOK_VERIFY_TOKEN: "vtok" } as unknown as Env;
 }
 
-beforeEach(() => { runtime = null; });
+beforeEach(() => { T = Math.floor(Date.now() / 1000); runtime = null; });
 
 describe("MODE does not gate the push path", () => {
+  it('resolves a real comment push without value.timestamp and deduplicates repeats', async () => {
+    const env = await envFor('polling');
+    Object.assign(client, { getCommentTimesPage: async () => ({ data: [{ id: 'cmW', timestamp: new Date(T * 1000).toISOString() }], cursor: null }) });
+    const push = commentPush();
+    const { timestamp, ...value } = push.entry[0]!.changes[0]!.value;
+    const raw = JSON.stringify({ entry: [{ changes: [{ field: 'comments', value }] }] });
+    for (let i = 0; i < 3; i++) expect((await handleWebhookEvent(env, post(raw, await sign(raw)))).status).toBe(200);
+    expect(client.calls.privateReply).toHaveLength(1);
+  });
   it("Any comment accepts only new timestamped emoji comments and deduplicates delayed pushes", async () => {
     const env = await envFor("polling", { match_mode: "any", keywords: [] });
     const after = new Date((Math.floor(Date.now() / 1000) + 1) * 1000).toISOString();
@@ -105,10 +115,11 @@ describe("MODE does not gate the push path", () => {
     const raw = JSON.stringify(commentPush());
     const envA = await envFor("polling");
     await handleWebhookEvent(envA, post(raw, await sign(raw)));
-    const polling = JSON.stringify(client.calls.privateReply);
+    const normalize=(calls:unknown)=>JSON.stringify(calls).replace(/FL1:[a-f0-9]{64}/g,'FL1:opaque');
+    const polling = normalize(client.calls.privateReply);
     const envB = await envFor("webhook");
     await handleWebhookEvent(envB, post(raw, await sign(raw)));
-    expect(JSON.stringify(client.calls.privateReply)).toBe(polling);
+    expect(normalize(client.calls.privateReply)).toBe(polling);
   });
 });
 
@@ -156,13 +167,7 @@ describe("signature verification", () => {
 describe("one bad event never blocks the rest of the batch", () => {
   it("two good comments still send when the first one throws", async () => {
     const env = await envFor("polling");
-    const rt = runtime as { engine: Engine };
-    const real = rt.engine.handleComment.bind(rt.engine);
-    let n = 0;
-    rt.engine.handleComment = async (e: never) => {
-      if (n++ === 0) throw new Error("poisoned event");
-      return real(e);
-    };
+    client.failNext.privateReply=1;
 
     const batch = { entry: [{ changes: [
       { field: "comments", value: { id: "a", text: "LINK", timestamp: new Date(T * 1000).toISOString(), from: { id: "uA" }, media: { id: "m1" } } },
@@ -176,7 +181,8 @@ describe("one bad event never blocks the rest of the batch", () => {
     // decides an endpoint is unhealthy and stops delivering to it. The failed one is left for the
     // reconciliation poll underneath.
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, failed: 1 });
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(await env.DB.prepare("SELECT COUNT(*) n FROM outbound_jobs WHERE status='unknown'").first()).toMatchObject({n:1});
     expect(client.calls.privateReply).toHaveLength(2);
   });
 });
@@ -277,7 +283,7 @@ describe("a typed DM is not a button press (regression)", () => {
   it("a read receipt is not a message and draws no DM (production regression)", async () => {
     const env = await envFor("polling", { ask_email: true });
     await send(env, commentPush());
-    await send(env, pressPush("OPENING_TAP:c1"));
+    await send(env, pressPush((client.calls.privateReply[0] as {buttons:{payload:string}[]}).buttons[0]!.payload));
     expect(client.calls.quick).toHaveLength(1); // the genuine email ask
 
     for (const mid of ["m1", "m2", "m3"]) {
@@ -291,7 +297,7 @@ describe("a typed DM is not a button press (regression)", () => {
   it("a reaction is not a message either", async () => {
     const env = await envFor("polling", { ask_email: true });
     await send(env, commentPush());
-    await send(env, pressPush("OPENING_TAP:c1"));
+    await send(env, pressPush((client.calls.privateReply[0] as {buttons:{payload:string}[]}).buttons[0]!.payload));
     const asks = client.calls.quick.length;
     await send(env, { entry: [{ messaging: [
       { sender: { id: "uW" }, timestamp: (T + 40) * 1000, reaction: { emoji: "heart" } }] }] });
@@ -301,7 +307,7 @@ describe("a typed DM is not a button press (regression)", () => {
   it("but a photo or voice note IS a reply and is still answered", async () => {
     const env = await envFor("polling", { ask_email: true });
     await send(env, commentPush());
-    await send(env, pressPush("OPENING_TAP:c1"));
+    await send(env, pressPush((client.calls.privateReply[0] as {buttons:{payload:string}[]}).buttons[0]!.payload));
     expect(client.calls.quick).toHaveLength(1);
 
     // No text field — the same normalized shape as a receipt, but it carries a `message`.
@@ -324,7 +330,7 @@ describe("a typed DM is not a button press (regression)", () => {
   it("an actual press still delivers, so the funnel is not simply broken", async () => {
     const env = await envFor("polling");
     await send(env, commentPush());
-    await send(env, pressPush("OPENING_TAP:c1"));
+    await send(env, pressPush((client.calls.privateReply[0] as {buttons:{payload:string}[]}).buttons[0]!.payload));
     expect(client.calls.text).toHaveLength(1);
   });
 });

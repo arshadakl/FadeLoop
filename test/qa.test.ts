@@ -10,7 +10,7 @@ import type { Campaign, Env, NormalizedComment, NormalizedMessage } from "../src
 import { makeTestDb } from "./helpers/fakeD1";
 import { FakeClient } from "./helpers/fakeClient";
 
-const T = Math.floor(Date.now() / 1000);
+let T = Math.floor(Date.now() / 1000);
 const fast = () => new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 });
 
 function campaign(over: Partial<Campaign> = {}): Campaign {
@@ -22,42 +22,33 @@ function campaign(over: Partial<Campaign> = {}): Campaign {
   };
 }
 const comment = (o: Partial<NormalizedComment> = {}): NormalizedComment =>
-  ({ kind: "comment", comment_id: "cm1", igsid: "u1", username: "u1", text: "LINK", media_id: "m1", timestamp: T, ...o });
+  ({ kind: "comment", comment_id: "cm1", igsid: "u1", username: "u1", text: "LINK", media_id: "m1", timestamp: Math.floor(Date.now()/1000), ...o });
 const msg = (o: Partial<NormalizedMessage> = {}): NormalizedMessage =>
   ({ kind: "message", igsid: "u1", timestamp: T + 100, ...o });
 
 let db: D1Database, client: FakeClient, engine: Engine;
-beforeEach(() => { db = makeTestDb(); client = new FakeClient(); engine = new Engine(db, client as never, fast()); });
+beforeEach(() => { T = Math.floor(Date.now() / 1000); db = makeTestDb(); client = new FakeClient(); engine = new Engine(db, client as never, fast()); });
 
 const openingBtn = () => (client.calls.privateReply[0] as { buttons: { title: string; payload: string }[] }).buttons[0]!;
 const followBtn = () => (client.calls.button[0] as { buttons: { title: string; payload: string }[] }).buttons[0]!;
 
 describe("buttons: identical labels on both steps", () => {
-  it("same text on the opening and follow buttons still routes correctly", async () => {
-    const same = "Send it to me";
-    await upsertCampaign(db, campaign({ check_follow: true, copy: { ...campaign().copy, opening_button: same, follow_button: same } }), true);
-    await engine.handleComment(comment());
-    await engine.handleMessage(msg({ payload: openingBtn().payload, timestamp: T + 10 }));
-    expect((await getConversation(db, "u1", "c1"))?.state).toBe("AWAITING_FOLLOW");
-
-    expect(openingBtn().title).toBe(followBtn().title);      // visually identical
-    expect(openingBtn().payload).not.toBe(followBtn().payload); // but distinguishable
-
-    await engine.handleMessage(msg({ payload: followBtn().payload, timestamp: T + 20 }));
-    expect((await getConversation(db, "u1", "c1"))?.state).toBe("DONE");
+  it("new configurations reject identical effective button labels", async () => {
+    await expect(upsertCampaign(db,campaign({check_follow:true,copy:{...campaign().copy,opening_button:'Send it to me',follow_button:'Send it to me'}}),true)).rejects.toThrow(/distinct labels/);
   });
 
   // With ONE funnel open the label is trusted as proof of a press, because a dropped postback
   // otherwise strands somebody at the gate forever. Identical labels on both steps are therefore
   // fine: the label says WHICH button, the conversation's state says which step it belongs to.
-  it("typing the label completes the funnel step by step when only one funnel is open", async () => {
-    const same = "Tap here";
-    await upsertCampaign(db, campaign({ check_follow: true, copy: { ...campaign().copy, opening_button: same, follow_button: same } }), true);
+  it("ambiguous label-only replies to legacy configurations remain held", async () => {
+    await upsertCampaign(db,campaign({check_follow:true}),true);
+    const legacy=campaign({check_follow:true,copy:{...campaign().copy,opening_button:'Tap here',follow_button:'Tap here'}});
+    await db.prepare('UPDATE campaigns SET config_json=?').bind(JSON.stringify(legacy)).run();
     await engine.handleComment(comment());
-    await engine.handleMessage(msg({ text: same, timestamp: T + 10 }));
-    expect((await getConversation(db, "u1", "c1"))?.state).toBe("AWAITING_FOLLOW");
-    await engine.handleMessage(msg({ text: same, timestamp: T + 20 }));
-    expect((await getConversation(db, "u1", "c1"))?.state).toBe("DONE");
+    await engine.handleMessage(msg({text:'Tap here',timestamp:T+10}));
+    await engine.handleMessage(msg({text:'Tap here',timestamp:T+20}));
+    expect((await getConversation(db,'u1','c1'))?.state).toBe('AWAITING_TAP');
+    expect(client.calls.button).toHaveLength(0);
   });
 });
 
@@ -91,7 +82,7 @@ describe("buttons: pressing the wrong one", () => {
 
     // The cap only stops the re-sends. They are still at the gate, and still able to finish.
     expect((await getConversation(db, "u1", "c1"))?.state).toBe("AWAITING_FOLLOW");
-    await engine.handleMessage(msg({ payload: "FOLLOW_CONFIRM:c1", timestamp: T + 60 }));
+    await engine.handleMessage(msg({ payload: followBtn().payload, timestamp: T + 60 }));
     expect((await getConversation(db, "u1", "c1"))?.state).toBe("DONE");
   });
 

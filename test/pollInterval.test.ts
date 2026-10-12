@@ -63,7 +63,7 @@ describe("the default config a fresh clone deploys", () => {
     expect(varOf("MODE")).toBe("polling");
   });
 
-  it("reaches someone within ~90 seconds, not minutes", () => {
+  it("uses three-minute reconciliation while retaining minute recovery ticks", () => {
     const env = {
       MODE: varOf("MODE"),
       POLL_INTERVAL_SECONDS: varOf("POLL_INTERVAL_SECONDS"),
@@ -71,6 +71,7 @@ describe("the default config a fresh clone deploys", () => {
     } as unknown as Env;
     const interval = pollIntervalSeconds(env);
     expect(interval).not.toBeNull();
-    expect(interval!).toBeLessThanOrEqual(90);
+    expect(interval).toBe(180);
+    expect(toml).toContain('crons = ["* * * * *", "0 3 * * *"]');
   });
 });

@@ -106,12 +106,16 @@ describe("owner passwords and sessions", () => {
     expect((await handleSession(new Request(origin + "/session/login", { ...options, body: "{" }), env, "/session/login")).status).toBe(400);
     expect((await handleSession(new Request(origin + "/session/login", { ...options, body: "x".repeat(4097) }), env, "/session/login")).status).toBe(413);
   });
-  it("uses salted Argon2id, preserves spaces, and verifies without plaintext storage", async () => {
-    expect(hash).toMatch(/^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
+  it("uses salted PBKDF2, verifies Argon2id backwards compatibility, preserves spaces, and verifies without plaintext storage", async () => {
+    expect(hash).toMatch(/^pbkdf2\$100000\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
     expect(await hashPassword(password)).not.toBe(hash);
     expect(await verifyPassword(password, hash)).toBe(true);
     expect(await verifyPassword(password.trim() + "x", hash)).toBe(false);
-    expect(await verifyPassword(password, hash.replace("m=19456", "m=8"))).toBe(false);
+    expect(await verifyPassword(password, hash.replace("100000", "50000"))).toBe(false);
+
+    // Verify backwards-compatible verification of legacy $argon2id$ hashes
+    const legacyArgonHash = "$argon2id$v=19$m=19456,t=2,p=1$BwAAAAAAAAAAAAAABAAAAA$dYxQ2mF6eRz6G9Hw1h2J3k4L5m6N7o8P9q0R1s2T3u4";
+    expect(await verifyPassword(password, legacyArgonHash.replace("m=19456", "m=8"))).toBe(false);
     expect(normalizeEmail(" OWNER@example.com ")).toBe("owner@example.com");
     expect(validPassword("short")).toBe(false);
     expect(validPassword("x".repeat(129))).toBe(false);
