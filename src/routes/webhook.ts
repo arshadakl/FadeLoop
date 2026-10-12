@@ -1,4 +1,5 @@
 import { connectionGeneration } from "../connection";
+import { getAuth } from "../db";
 // Inbound webhooks. NOTE: this route is NOT gated on MODE — if Meta is configured to push to
 // /webhook, those events are verified and dispatched to the engine immediately, whatever MODE says.
 //
@@ -15,7 +16,7 @@ import { connectionGeneration } from "../connection";
 
 import { WEBHOOK_FIELDS } from "../api/client";
 import { buildRuntime, toUnixSeconds } from "../runtime";
-import type { Env, NormalizedComment, NormalizedMessage } from "../types";
+import type { Env, NormalizedComment, NormalizedMessage, NormalizedEvent } from "../types";
 import { json } from "./http";
 
 /** GET /webhook — Meta subscription verification handshake. */
@@ -94,9 +95,10 @@ export async function handleWebhookAdmin(env: Env, method: string): Promise<Resp
 }
 
 /** POST /webhook — verify signature, then dispatch normalized events to the engine. */
-export async function handleWebhookEvent(env: Env, req: Request): Promise<Response> {
+export async function handleWebhookEvent(env: Env, req: Request, ctx?: ExecutionContext): Promise<Response> {
   const generation = await connectionGeneration(env.DB);
   const raw = await req.text();
+  if(new TextEncoder().encode(raw).length>512*1024)return json({error:'Webhook batch too large'},413);
   const sig = req.headers.get("x-hub-signature-256");
   if (!(await verifySignature(env.APP_SECRET, raw, sig))) {
     return new Response("invalid signature", { status: 401 });
@@ -109,25 +111,12 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
     return json({ error: "invalid JSON" }, 400);
   }
 
-  const rt = await buildRuntime(env);
-  if (!rt || rt.auth.connection_generation !== generation) return json({ ok: true, note: "connection changed or disconnected" });
+  const rt = await buildRuntime(env,true);
+  if(!rt){const auth=await getAuth(env.DB);if(auth && auth.connection_generation===generation)return json({error:'Connected account identity unresolved; retry after reconnection'},503);return json({ok:true,note:'Disconnected or connection changed'});}
+  if(rt.auth.connection_generation!==generation)return json({ok:true,note:'Connection changed'});
 
-  // Every event in the batch is dispatched independently. One event that throws must never block
-  // the others: this is the push path, and blocking it is exactly what turns a single bad event
-  // into "nobody got their DM". A failed event is left for the reconciliation poll underneath to
-  // pick up (the engine commits state only after a successful send, so nothing is half-applied),
-  // which is what that poll is for. We still answer 200 so Meta does not re-push the events that
-  // already succeeded — they are idempotent, but repeated 5xx marks the endpoint unhealthy and
-  // Meta eventually stops delivering to it altogether.
-  let failed = 0;
-  const dispatch = async (label: string, run: () => Promise<void>) => {
-    try {
-      await run();
-    } catch (e) {
-      failed++;
-      console.warn(`[FadeLoop] webhook ${label} failed: ${e instanceof Error ? e.message : e}`);
-    }
-  };
+  // Acknowledgement follows durable persistence, not completion of external sends.
+  const events: NormalizedEvent[]=[];
 
   for (const entry of body.entry ?? []) {
     // Comment change events.
@@ -136,17 +125,18 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
       const v = change.value;
       const igsid = v.from?.id;
       const mediaId = v.media?.id;
-      if (!igsid || !mediaId || !v.id) continue;
+      if (!mediaId || !v.id || igsid===rt.igUserId) continue;
       const evt: NormalizedComment = {
         kind: "comment",
         comment_id: v.id,
-        igsid,
+        igsid:igsid??'',
         username: v.from?.username,
         text: v.text ?? "",
         media_id: mediaId,
+        timestamp_ms:v.timestamp && Number.isFinite(Date.parse(v.timestamp))?Date.parse(v.timestamp):0,
         timestamp: v.timestamp && Number.isFinite(Date.parse(v.timestamp)) ? toUnixSeconds(v.timestamp) : 0,
       };
-      await dispatch(`comment ${v.id}`, () => rt.engine.handleComment(evt));
+      events.push(evt);
     }
 
     // Messaging events (taps, replies, postbacks).
@@ -165,39 +155,46 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
     for (const m of entry.messaging ?? []) {
       const igsid = m.sender?.id;
       if (!igsid || igsid === rt.igUserId) continue;
+      if(m.recipient?.id && m.recipient.id!==rt.igUserId)continue;
       if (m.message?.is_echo) continue;
       if (!m.message && !m.postback) continue; // read / reaction / delivery receipt
       const payload = m.postback?.payload ?? m.message?.quick_reply?.payload;
       const evt: NormalizedMessage = {
         kind: "message",
         igsid,
+        message_id:m.message?.mid ?? m.postback?.mid,
+        timestamp_ms:m.timestamp ?? 0,
         text: m.message?.text ?? m.postback?.title,
         payload,
-        timestamp: m.timestamp ? Math.floor(m.timestamp / 1000) : toUnixSeconds(undefined),
+        timestamp: m.timestamp ? Math.floor(m.timestamp / 1000) : 0,
       };
-      await dispatch(`message from ${igsid}`, () => rt.engine.handleMessage(evt));
+      events.push(evt);
     }
   }
 
-  return failed > 0 ? json({ ok: true, failed }) : json({ ok: true });
+  try { await rt.engine.ingest(events,'webhook'); }
+  catch { return json({error:'Webhook persistence failed; retry'},503); }
+  if(ctx)ctx.waitUntil(rt.engine.drain(2).catch(()=>console.warn('[FadeLoop] deferred processing retained for cron')));
+  else await rt.engine.drain();
+  return json({ok:true});
 }
 
 async function verifySignature(appSecret: string, raw: string, header: string | null): Promise<boolean> {
   if (!header || !header.startsWith("sha256=") || !appSecret) return false;
-  const expected = header.slice("sha256=".length);
+  const expectedHex = header.slice("sha256=".length);
+  if (expectedHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(expectedHex)) return false;
+  const expectedBytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    expectedBytes[i] = parseInt(expectedHex.slice(i * 2, i * 2 + 2), 16);
+  }
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(appSecret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"],
+    ["verify"]
   );
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
-  const actual = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  if (actual.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < actual.length; i++) mismatch |= actual.charCodeAt(i) ^ expected.charCodeAt(i);
-  return mismatch === 0;
+  return crypto.subtle.verify("HMAC", key, expectedBytes, new TextEncoder().encode(raw));
 }
 
 // ---- webhook payload shapes (subset we consume) ----
@@ -218,9 +215,10 @@ interface CommentValue {
 }
 interface MessagingEvent {
   sender?: { id?: string };
+  recipient?: {id?:string};
   timestamp?: number;
-  message?: { text?: string; is_echo?: boolean; quick_reply?: { payload?: string } };
-  postback?: { payload?: string; title?: string };
+  message?: { mid?:string; text?: string; is_echo?: boolean; quick_reply?: { payload?: string } };
+  postback?: { mid?:string; payload?: string; title?: string };
   // Present on the signals that are NOT inbound content. Declared so the shape documents why the
   // loop above filters on `message`/`postback` rather than trusting every entry to be a message.
   read?: unknown;

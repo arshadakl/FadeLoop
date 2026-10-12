@@ -1,5 +1,6 @@
 import { ConnectionChangedError, connectionGeneration, guardedConnectionDb } from "./connection";
 import { disconnectInstagram } from "./auth/disconnect";
+import { budgetDatabase, remainingQueries, WorkBudgetExceeded } from './reliability/budget';
 // FadeLoop Worker entry point. `fetch` serves the dashboard, owner sessions and OAuth routes;
 // `scheduled` runs the existing polling crons and daily Instagram token refresh.
 
@@ -20,9 +21,15 @@ const POLL_CRON = "* * * * *";
 const REFRESH_CRON = "0 3 * * *";
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    env = {...env, DB:budgetDatabase(env.DB)};
     let result: Response;
-    try { result = await routeRequest(req, env); } catch (error) {
+    try { result = await routeRequest(req, env, ctx); } catch (error) {
+      if (String(error).includes('UNIQUE constraint failed: campaigns.media_id')) {
+        const rows=await env.DB.prepare('SELECT campaign_id,media_id FROM campaigns WHERE active=1 AND archived_at IS NULL').all();
+        return json({error:'Only one automation may be active per post',conflicts:rows.results},409);
+      }
+      if(error instanceof WorkBudgetExceeded)return json({error:'Work retained; retry request'},503);
       if (!(error instanceof ConnectionChangedError)) throw error;
       result = json({ error: error.message }, 409);
     }
@@ -36,20 +43,32 @@ export default {
   },
 
   async scheduled(event: ScheduledController, env: Env): Promise<void> {
+    env = {...env,DB:budgetDatabase(env.DB)};
     if (event.cron === REFRESH_CRON) {
       const result = await refreshTokenIfDue(env);
       console.log(`[FadeLoop] token refresh: ${result.status}`);
+      // Nightly maintenance retention sweep: prune old rate limit attempts and completed events
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM send_attempts WHERE dispatched_at < ?").bind(nowSec - 86400),
+          env.DB.prepare("DELETE FROM inbound_events WHERE status = 'done' AND created_at < ?").bind(nowSec - 7 * 86400),
+          env.DB.prepare("DELETE FROM automation_audit WHERE created_at < ?").bind((nowSec - 30 * 86400) * 1000),
+        ]);
+        console.log("[FadeLoop] nightly retention cleanup completed");
+      } catch (err) {
+        console.warn(`[FadeLoop] nightly retention cleanup failed: ${err instanceof Error ? err.message : err}`);
+      }
       return;
     }
     if (event.cron === POLL_CRON) {
       const interval = pollIntervalSeconds(env);
-      if (interval === null) return;
       await runPoll(env, interval);
     }
   },
 } satisfies ExportedHandler<Env>;
 
-async function routeRequest(req: Request, env: Env): Promise<Response> {
+async function routeRequest(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     const { pathname } = url;
     const method = req.method.toUpperCase();
@@ -62,9 +81,9 @@ async function routeRequest(req: Request, env: Env): Promise<Response> {
     // handleCallback verifies session-bound state and protects the existing Instagram account.
     if (pathname === "/auth/callback" && method === "GET") return handleCallback(env, url, req);
 
-    // Webhook (only meaningful when MODE=webhook; verification is always safe to answer).
+    // Webhooks ingest in both modes; MODE only controls reconciliation polling.
     if (pathname === "/webhook" && method === "GET") return handleWebhookVerify(env, url);
-    if (pathname === "/webhook" && method === "POST") return handleWebhookEvent(env, req);
+    if (pathname === "/webhook" && method === "POST") return handleWebhookEvent(env, req, ctx);
 
     // --- owner-only API + admin routes ---
     if (pathname.startsWith("/api/")) {
@@ -120,14 +139,19 @@ async function routeRequest(req: Request, env: Env): Promise<Response> {
  * in db.ts for why that distinction matters: it's what stops an overlapping cron tick or a
  * /admin/poll call racing the cron from both polling at once and double-sending a real DM.
  */
-async function runPoll(env: Env, interval: number): Promise<void> {
-  const rt = await buildRuntime(env);
+async function runPoll(env: Env, interval: number | null): Promise<void> {
+  const rt = await buildRuntime(env,true);
   if (!rt) return;
-  try { if (!await claimPollSlot(rt.db, interval)) return; } catch (e) {
+  if(rt.auth.expires_at<=Math.floor(Date.now()/1000)){await rt.engine.drain();return;}
+  if(interval===null){await rt.engine.drain();return;}
+  try { if (!await claimPollSlot(rt.db, interval)) { await rt.engine.drain(); return; } } catch (e) {
     if (e instanceof ConnectionChangedError) return;
     throw e;
   }
 
+  // Alternate priority so sustained ingestion and sustained processing both make progress.
+  if(Math.floor(Date.now()/60_000)%2===0)await rt.engine.drain();
+  if(remainingQueries(env.DB)<12)return;
   // Isolated so one poll can never starve the other. pollComments used to run first with no
   // guard, which meant a throw there silently skipped the message poll for that whole tick.
   try {
@@ -136,8 +160,9 @@ async function runPoll(env: Env, interval: number): Promise<void> {
     console.warn(`[FadeLoop] pollComments failed: ${e instanceof Error ? e.message : e}`);
   }
   try {
-    await pollMessages(rt, rt.db);
+    if(remainingQueries(env.DB)>=12)await pollMessages(rt, rt.db);
   } catch (e) {
     console.warn(`[FadeLoop] pollMessages failed: ${e instanceof Error ? e.message : e}`);
   }
+  await rt.engine.drain();
 }

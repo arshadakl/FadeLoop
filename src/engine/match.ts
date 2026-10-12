@@ -13,10 +13,21 @@ export function escapeRegex(s: string): string {
  * matches exactly. Lookaround on \p{L}/\p{N} keeps the boundary correct for any script while
  * still treating emoji/punctuation as boundaries.
  */
+const REGEX_CACHE = new Map<string, RegExp>();
+const MAX_REGEX_CACHE_SIZE = 250;
+
 export function matchesKeyword(text: string, keyword: string): boolean {
   const kw = keyword.trim();
   if (!kw) return false;
-  const re = new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(kw)}(?![\\p{L}\\p{N}_])`, "iu");
+  let re = REGEX_CACHE.get(kw);
+  if (!re) {
+    if (REGEX_CACHE.size >= MAX_REGEX_CACHE_SIZE) {
+      const firstKey = REGEX_CACHE.keys().next().value;
+      if (firstKey) REGEX_CACHE.delete(firstKey);
+    }
+    re = new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(kw)}(?![\\p{L}\\p{N}_])`, "iu");
+    REGEX_CACHE.set(kw, re);
+  }
   return re.test(text);
 }
 
