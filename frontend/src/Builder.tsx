@@ -1,5 +1,6 @@
 import {
   useState,
+  useEffect,
   type Dispatch,
   type SetStateAction,
   type ReactNode,
@@ -42,6 +43,7 @@ export function Builder({
   mediaError,
   mediaLoading,
   retryMedia,
+  refresh,
   load,
   done,
   toast,
@@ -56,6 +58,7 @@ export function Builder({
   mediaError: string;
   mediaLoading: boolean;
   retryMedia(): void;
+  refresh(): void;
   load(c: CampaignRow | null): void;
   done(): void;
   toast(message: string, error?: boolean): void;
@@ -69,6 +72,18 @@ export function Builder({
   const [keywords, setKeywords] = useState(d.keywords.join(", "));
   const [exclude, setExclude] = useState(d.exclude.join(", "));
   const [replies, setReplies] = useState((d.public_reply.texts || []).join("\n"));
+
+  useEffect(() => {
+    setKeywords(d.keywords.join(", "));
+  }, [d.keywords]);
+
+  useEffect(() => {
+    setExclude(d.exclude.join(", "));
+  }, [d.exclude]);
+
+  useEffect(() => {
+    setReplies((d.public_reply.texts || []).join("\n"));
+  }, [d.public_reply.texts]);
   const patch = (value: Partial<Draft>) =>
     setDraft((previous) => (previous ? { ...previous, ...value } : previous));
   const copy = (key: keyof Draft["copy"], value: string) =>
@@ -110,6 +125,7 @@ export function Builder({
           body: { campaign_id: campaign.campaign_id, active },
         });
       markSaved({ ...d, campaign_id: campaign.campaign_id, active });
+      refresh();
       toast(
         activation
           ? active

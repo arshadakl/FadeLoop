@@ -541,6 +541,7 @@ function Workspace({
                       mediaError={mediaError}
                       mediaLoading={mediaLoading}
                       retryMedia={() => setMediaRevision((v) => v + 1)}
+                      refresh={refresh}
                       load={(c) => navigate("create", c)}
                       done={() => {
                         setPage("automations");
