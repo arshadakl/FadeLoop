@@ -306,7 +306,7 @@ export function Builder({
               />
             </Field>
             <div className="keyword-chips">
-              {["Price", "Link", "Shop"].map((word) => (
+              {["Price", "Link", "Shop", "🙌"].map((word) => (
                 <Button
                   key={word}
                   variant="secondary"
