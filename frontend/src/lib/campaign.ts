@@ -95,7 +95,7 @@ export function buildCampaignFromDraft(d: Draft): Campaign {
 export function validateDraft(d: Draft) {
   if (!d.media_id) return "Select a post or reel in section 1.";
   if (d.match_mode !== "any" && !d.keywords.length) return "Add at least one keyword in section 2.";
-  if (!d.reward.value) return "Add your link or reward in section 4.";
+  if (d.reward.type !== "text" && !d.reward.value.trim()) return "Add your link or reward in section 4.";
   if (!d.opening_enabled)
     return "Turn on the opening DM — it’s required to start the funnel.";
   return null;

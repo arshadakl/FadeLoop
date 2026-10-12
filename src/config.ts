@@ -38,7 +38,8 @@ export function validateCampaign(input: unknown, index = 0): Campaign {
   if (
     !reward ||
     !["link", "code", "text"].includes(reward.type as string) ||
-    !isNonEmptyString(reward.value)
+    (reward.type !== "text" && !isNonEmptyString(reward.value)) ||
+    (typeof reward.value !== "string")
   ) {
     throw new ConfigError(`${where}.reward must be { type: link|code|text, value: string }`);
   }

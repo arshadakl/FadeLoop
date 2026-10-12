@@ -431,24 +431,54 @@ export function Builder({
           <Section
             number={4}
             title="And then, they will get"
-            hint="The reward, delivered by DM. Use {reward} to place your link."
+            hint={d.reward.type === "link" ? "The reward, delivered by DM. Use {reward} to place your link." : "The final DM message sent to the commenter."}
           >
+            <Choice
+              label="Final delivery type"
+              value={d.reward.type === "text" ? "text" : "link"}
+              onChange={(value) => {
+                if (value === "text") {
+                  patch({
+                    reward: { type: "text", value: "" },
+                    copy: {
+                      ...d.copy,
+                      delivery: d.copy.delivery.replace(/\s*\{reward\}\s*/g, " ").trim() || "Thank you for commenting! 🙌",
+                    },
+                  });
+                } else {
+                  patch({
+                    reward: { type: "link", value: d.reward.value },
+                    copy: {
+                      ...d.copy,
+                      delivery: d.copy.delivery.includes("{reward}") ? d.copy.delivery : `${d.copy.delivery.trim()} {reward}`.trim(),
+                    },
+                  });
+                }
+              }}
+              options={[
+                { value: "link", label: "Include a link or reward URL" },
+                { value: "text", label: "Text message only (no link)" },
+              ]}
+            />
             <Field label="Delivery message">
               <Textarea
                 value={d.copy.delivery}
                 onChange={(e) => copy("delivery", e.target.value)}
+                placeholder={d.reward.type === "link" ? "Here you go 🎉 {reward}" : "Thank you for reaching out! 🙌"}
               />
             </Field>
-            <Field label="Link or reward">
-              <Input
-                type="url"
-                value={d.reward.value}
-                onChange={(e) =>
-                  patch({ reward: { ...d.reward, value: e.target.value } })
-                }
-                placeholder="https://example.com/guide"
-              />
-            </Field>
+            {d.reward.type !== "text" && (
+              <Field label="Link or reward URL">
+                <Input
+                  type="url"
+                  value={d.reward.value}
+                  onChange={(e) =>
+                    patch({ reward: { ...d.reward, value: e.target.value } })
+                  }
+                  placeholder="https://example.com/guide"
+                />
+              </Field>
+            )}
           </Section>
         </fieldset>
         <Collapsible

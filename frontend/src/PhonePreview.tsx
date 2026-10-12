@@ -32,8 +32,8 @@ export function PhonePreview({
     expanded || !captionLong ? caption : caption.slice(0, 70) + "…";
   const delivery = (d.copy.delivery || "").replace(
     /\{reward\}/g,
-    d.reward.value || "your link",
-  );
+    d.reward.type === "text" ? "" : (d.reward.value || "your link"),
+  ).trim();
   return (
     <div className="phone" aria-label="Instagram preview">
       <div className="phone-status">
