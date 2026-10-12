@@ -36,6 +36,7 @@ export async function handleApi(env: Env, req: Request, url: URL): Promise<Respo
   if (path === "/api/media" && method === "GET") return mediaResponse(env);
 
   // Campaigns.
+  if (path === "/api/campaigns/stats" && method === "GET") return campaignsStats(env);
   if (path === "/api/campaigns" && method === "GET") return campaignsList(env, url);
   if (path === "/api/campaigns" && method === "POST") return campaignSave(env, req);
   if (path === "/api/campaigns/status" && method === "POST") return campaignStatus(env, req);
@@ -91,6 +92,25 @@ async function mediaResponse(env: Env): Promise<Response> {
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }
+}
+
+async function campaignsStats(env: Env): Promise<Response> {
+  const rows = await env.DB.prepare(`
+    SELECT campaign_id,
+      SUM(CASE WHEN type = 'opening_sent' THEN 1 ELSE 0 END) AS sends,
+      SUM(CASE WHEN type = 'button_clicked' THEN 1 ELSE 0 END) AS clicks
+    FROM events
+    GROUP BY campaign_id
+  `).all<{ campaign_id: string; sends: number; clicks: number }>();
+
+  const stats: Record<string, { runs: number; ctr: number }> = {};
+  for (const r of rows.results ?? []) {
+    const sends = Number(r.sends) || 0;
+    const clicks = Number(r.clicks) || 0;
+    const ctr = sends > 0 ? Math.round((clicks / sends) * 100) : 0;
+    stats[r.campaign_id] = { runs: sends, ctr };
+  }
+  return json({ stats });
 }
 
 async function campaignsList(env: Env, url: URL): Promise<Response> {

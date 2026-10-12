@@ -105,13 +105,30 @@ export function Builder({
       return;
     }
     setBusy(true);
-    const campaign = buildCampaignFromDraft(d);
     const active =
       activation === "activate"
         ? true
         : activation === "deactivate"
           ? false
           : d.active;
+    if (active) {
+      const conflict = campaigns.find(
+        (c) =>
+          c.active &&
+          !c.archived &&
+          c.media_id === d.media_id &&
+          c.campaign_id !== d.campaign_id,
+      );
+      if (conflict) {
+        setBusy(false);
+        toast(
+          `This post is already active in "${conflict.name || conflict.campaign_id}". Stop it first before activating this automation.`,
+          true,
+        );
+        return;
+      }
+    }
+    const campaign = buildCampaignFromDraft(d);
     try {
       await api("/api/campaigns", {
         method: "POST",
@@ -283,6 +300,21 @@ export function Builder({
                 {showAll ? "Show less" : `See more (${media.length - 5})`}
               </Button>
             )}
+            {(() => {
+              const conflict = campaigns.find(
+                (c) =>
+                  c.active &&
+                  !c.archived &&
+                  c.media_id === d.media_id &&
+                  c.campaign_id !== d.campaign_id,
+              );
+              if (!conflict) return null;
+              return (
+                <p role="alert" className="conflict-warning" style={{ color: "var(--warning, #eab308)", fontSize: "0.875rem", marginTop: "0.5rem" }}>
+                  ⚠️ This post is currently active in <strong>"{conflict.name || conflict.campaign_id}"</strong>. Only one automation can be active per post. Stop the other automation before activating this one, or save as a draft.
+                </p>
+              );
+            })()}
           </Section>
           <Section
             number={2}

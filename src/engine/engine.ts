@@ -74,7 +74,7 @@ export class Engine {
   }
 
   /** Bounded on both SQL and wall time. Cron resumes durable leftovers. */
-  async drain(maxSteps = 8): Promise<void> {
+  async drain(maxSteps = 20): Promise<void> {
     const deadline = this.options.deadline ?? this.clock() + 25_000;
     try {
       const now = this.clock();
@@ -94,7 +94,7 @@ export class Engine {
       if (!due?.due) return;
       }
       await this.recoverAbandoned();
-      for (let i = 0; i < maxSteps && this.remaining() >= 20 && this.clock() < deadline; i++) {
+      for (let i = 0; i < maxSteps && this.remaining() >= 8 && this.clock() < deadline; i++) {
         const token = crypto.randomUUID(), t = this.clock();
         const event = await this.db.prepare(`UPDATE inbound_events SET status='processing',lease_token=?,lease_until=?,touched_at=?
           WHERE id=(SELECT e.id FROM inbound_events e WHERE generation=? AND
@@ -115,7 +115,7 @@ export class Engine {
             console.warn('[FadeLoop] durable event failed', event.id);
           }
         }
-        if (this.remaining() >= 14 && this.clock() + 17_000 < deadline) worked = await this.dispatchOne() || worked;
+        if (this.remaining() >= 6 && this.clock() + 3_000 < deadline) worked = await this.dispatchOne() || worked;
         if (!worked) break;
       }
     } catch (error) {
@@ -289,8 +289,8 @@ export class Engine {
       .bind(id,row.campaign_id,recipient,row.instance_id,version,id);
   }
   async dispatchOne(): Promise<boolean> {
-    if(this.options.maintenance || this.remaining()<14 || this.clock()+17_000> (this.options.deadline??Infinity))return false;
-    const t=this.clock(),token=crypto.randomUUID();
+    if(this.options.maintenance || this.remaining()<6 || this.clock()+3_000> (this.options.deadline??Infinity))return false;
+    let t=this.clock();
     const job=await this.db.prepare(`SELECT j.* FROM outbound_jobs j JOIN campaigns p ON p.instance_id=j.campaign_instance AND p.campaign_id=j.campaign_id
       WHERE j.generation=? AND j.status IN ('pending','retry_scheduled','held') AND j.next_at<=? AND p.active=1 AND p.archived_at IS NULL ORDER BY j.updated_at,j.id LIMIT 1`)
       .bind(this.generation,t).first<OutboundJob>();
@@ -302,6 +302,31 @@ export class Engine {
       return true;
     }
     const isDm=request.method!=='reply';
+
+    const pacing = await this.db.prepare(`SELECT
+      COALESCE((SELECT MAX(dispatched_at) FROM send_attempts), 0) AS last_dispatched,
+      COALESCE((SELECT account_interval_ms FROM automation_control WHERE id=1), 1200) AS interval,
+      COALESCE((SELECT MAX(dispatched_at) FROM send_attempts WHERE recipient=? AND is_dm=1), 0) AS last_recipient,
+      COALESCE((SELECT recipient_interval_ms FROM automation_control WHERE id=1), 2000) AS rec_interval
+    `).bind(job.recipient).first<{last_dispatched:number;interval:number;last_recipient:number;rec_interval:number}>();
+
+    if (pacing) {
+      let sleepMs = 0;
+      if (pacing.interval > 0) {
+        const elapsed = t - pacing.last_dispatched;
+        if (elapsed < pacing.interval) sleepMs = Math.max(sleepMs, pacing.interval - elapsed);
+      }
+      if (isDm && pacing.rec_interval > 0) {
+        const recElapsed = t - pacing.last_recipient;
+        if (recElapsed < pacing.rec_interval) sleepMs = Math.max(sleepMs, pacing.rec_interval - recElapsed);
+      }
+      if (sleepMs > 0 && sleepMs <= 2500 && this.clock() + sleepMs + 3_000 < (this.options.deadline ?? Infinity)) {
+        await new Promise(r => setTimeout(r, sleepMs));
+        t = this.clock();
+      }
+    }
+
+    const token=crypto.randomUUID();
     // One transaction serializes the account budget, ownership and dispatch authorization.
     const results=await this.db.batch([
       this.db.prepare(`UPDATE outbound_jobs SET status='sending',owner_token=?,dispatch_at=?,attempts=attempts+1,updated_at=?,error=NULL
@@ -318,8 +343,11 @@ export class Engine {
       this.db.prepare(`INSERT INTO send_attempts(id,job_id,generation,recipient,is_dm,dispatched_at) SELECT ?,id,generation,recipient,?,? FROM outbound_jobs WHERE id=? AND status='sending' AND owner_token=?`)
         .bind(token,isDm?1:0,t,job.id,token),
     ]);
-    if(!results[0]?.meta.changes){await this.db.prepare(`UPDATE outbound_jobs SET status='held',next_at=?,updated_at=?,error='Sending held by account, recipient, or campaign safety controls' WHERE id=? AND status IN ('pending','retry_scheduled','held')`)
-      .bind(t+60_000,t,job.id).run();return true;}
+    if(!results[0]?.meta.changes){
+      const retryDelay = Math.max(1200, pacing?.interval ?? 1200);
+      await this.db.prepare(`UPDATE outbound_jobs SET status='held',next_at=?,updated_at=?,error='Sending held by account, recipient, or campaign safety controls' WHERE id=? AND status IN ('pending','retry_scheduled','held')`)
+        .bind(t+retryDelay,t,job.id).run();return true;
+    }
     job.owner_token=token;job.attempts++;
     try {
       let result: {message_id?:string;id?:string};

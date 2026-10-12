@@ -22,7 +22,7 @@ const REFRESH_CRON = "0 3 * * *";
 
 export default {
   async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
-    env = {...env, DB:budgetDatabase(env.DB)};
+    env = {...env, DB:budgetDatabase(env.DB, 80)};
     let result: Response;
     try { result = await routeRequest(req, env, ctx); } catch (error) {
       if (String(error).includes('UNIQUE constraint failed: campaigns.media_id')) {
@@ -43,7 +43,7 @@ export default {
   },
 
   async scheduled(event: ScheduledController, env: Env): Promise<void> {
-    env = {...env,DB:budgetDatabase(env.DB)};
+    env = {...env,DB:budgetDatabase(env.DB, 80)};
     if (event.cron === REFRESH_CRON) {
       const result = await refreshTokenIfDue(env);
       console.log(`[FadeLoop] token refresh: ${result.status}`);
@@ -54,6 +54,8 @@ export default {
           env.DB.prepare("DELETE FROM send_attempts WHERE dispatched_at < ?").bind(nowSec - 86400),
           env.DB.prepare("DELETE FROM inbound_events WHERE status = 'done' AND created_at < ?").bind(nowSec - 7 * 86400),
           env.DB.prepare("DELETE FROM automation_audit WHERE created_at < ?").bind((nowSec - 30 * 86400) * 1000),
+          env.DB.prepare("DELETE FROM conversations WHERE lifecycle IN ('completed', 'closed', 'failed') AND updated_at < ?").bind(nowSec - 90 * 86400),
+          env.DB.prepare("DELETE FROM events WHERE created_at < ?").bind(nowSec - 90 * 86400),
         ]);
         console.log("[FadeLoop] nightly retention cleanup completed");
       } catch (err) {
@@ -149,9 +151,9 @@ async function runPoll(env: Env, interval: number | null): Promise<void> {
     throw e;
   }
 
-  // Alternate priority so sustained ingestion and sustained processing both make progress.
-  if(Math.floor(Date.now()/60_000)%2===0)await rt.engine.drain();
-  if(remainingQueries(env.DB)<12)return;
+  // Drain pending outbox jobs before polling
+  await rt.engine.drain();
+  if(remainingQueries(env.DB)<10)return;
   // Isolated so one poll can never starve the other. pollComments used to run first with no
   // guard, which meant a throw there silently skipped the message poll for that whole tick.
   try {
@@ -160,7 +162,7 @@ async function runPoll(env: Env, interval: number | null): Promise<void> {
     console.warn(`[FadeLoop] pollComments failed: ${e instanceof Error ? e.message : e}`);
   }
   try {
-    if(remainingQueries(env.DB)>=12)await pollMessages(rt, rt.db);
+    if(remainingQueries(env.DB)>=10)await pollMessages(rt, rt.db);
   } catch (e) {
     console.warn(`[FadeLoop] pollMessages failed: ${e instanceof Error ? e.message : e}`);
   }

@@ -1,7 +1,7 @@
 import type { Runtime } from '../runtime';
 import type { NormalizedMessage } from '../types';
 import { checkpoint,beginPoll,pollFailure,readPollError,clearPollErrorStatement } from './checkpoint';
-import {WorkBudgetExceeded} from '../reliability/budget';
+import {WorkBudgetExceeded, remainingQueries} from '../reliability/budget';
 import {ConnectionChangedError,ConnectionCheckFailedError} from '../connection';
 const ERROR_KEY='last_msg_poll_error';
 export async function pollMessages(rt:Runtime,db:D1Database):Promise<void>{

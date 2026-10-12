@@ -126,6 +126,8 @@ export async function handleWebhookEvent(env: Env, req: Request, ctx?: Execution
       const igsid = v.from?.id;
       const mediaId = v.media?.id;
       if (!mediaId || !v.id || igsid===rt.igUserId) continue;
+      const rawTime = v.timestamp || (v as any).created_time || (v as any).created_at;
+      const parsedMs = typeof rawTime === "number" ? (rawTime > 1e11 ? rawTime : rawTime * 1000) : (rawTime && Number.isFinite(Date.parse(rawTime)) ? Date.parse(rawTime) : 0);
       const evt: NormalizedComment = {
         kind: "comment",
         comment_id: v.id,
@@ -133,8 +135,8 @@ export async function handleWebhookEvent(env: Env, req: Request, ctx?: Execution
         username: v.from?.username,
         text: v.text ?? "",
         media_id: mediaId,
-        timestamp_ms:v.timestamp && Number.isFinite(Date.parse(v.timestamp))?Date.parse(v.timestamp):0,
-        timestamp: v.timestamp && Number.isFinite(Date.parse(v.timestamp)) ? toUnixSeconds(v.timestamp) : 0,
+        timestamp_ms: parsedMs,
+        timestamp: parsedMs > 0 ? Math.floor(parsedMs / 1000) : 0,
       };
       events.push(evt);
     }
@@ -174,8 +176,8 @@ export async function handleWebhookEvent(env: Env, req: Request, ctx?: Execution
 
   try { await rt.engine.ingest(events,'webhook'); }
   catch { return json({error:'Webhook persistence failed; retry'},503); }
-  if(ctx)ctx.waitUntil(rt.engine.drain(2).catch(()=>console.warn('[FadeLoop] deferred processing retained for cron')));
-  else await rt.engine.drain();
+  if(ctx)ctx.waitUntil(rt.engine.drain(6).catch(()=>console.warn('[FadeLoop] deferred processing retained for cron')));
+  else await rt.engine.drain(6);
   return json({ok:true});
 }
 

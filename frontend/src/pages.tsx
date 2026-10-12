@@ -136,24 +136,14 @@ export function Automations({
   }, [rows]);
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all(
-      campaigns.map(async (c) => {
-        try {
-          const data = await api<DashboardData>(
-            `/api/dashboard?campaign_id=${encodeURIComponent(c.campaign_id)}&days=3650`,
-            { signal: controller.signal },
-          );
-          return [
-            c.campaign_id,
-            { runs: data.cards.sends, ctr: data.cards.ctr },
-          ] as const;
-        } catch {
-          return [c.campaign_id, { runs: 0, ctr: 0 }] as const;
-        }
-      }),
-    ).then((result) => {
-      if (!controller.signal.aborted) setStats(Object.fromEntries(result));
-    });
+    api<{ stats: Record<string, { runs: number; ctr: number }> }>(
+      "/api/campaigns/stats",
+      { signal: controller.signal },
+    )
+      .then((data) => {
+        if (!controller.signal.aborted) setStats(data.stats || {});
+      })
+      .catch(() => {});
     return () => controller.abort();
   }, [campaigns, revision]);
   async function mutate(action: "archive" | "delete") {
