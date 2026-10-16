@@ -16,7 +16,7 @@ export async function consumeTasks(batch:MessageBatch<Notification>,environment:
   if(!value||value.schema!==1||typeof value.taskId!=='string'||value.taskId.length>1024||!Number.isSafeInteger(value.generation)){message.ack();return;}
   const env={...environment,DB:budgetDatabase(environment.DB,40)},rt=await buildRuntime(env,true);
   if(!rt||rt.auth.connection_generation!==value.generation){message.ack();return;}
-  const task=await claimTask(rt.db,value.taskId,value.generation);if(!task){message.ack();return;}
+  const task=await claimTask(rt.db,value.taskId,value.generation,pollIntervalSeconds(env)!==null);if(!task){message.ack();return;}
   try{
     let next:number|undefined;
     switch(task.kind){
@@ -30,8 +30,9 @@ export async function consumeTasks(batch:MessageBatch<Notification>,environment:
       }
       case 'comments':case 'messages':{
         const interval=pollIntervalSeconds(env);
-        if(interval===null||rt.auth.expires_at<=Math.floor(Date.now()/1000))next=Date.now()+60_000;
-        else next=await pollTask(rt,task,interval);
+        // Claim eligibility is authoritative. A configuration race is resolved by
+        // the next bounded repair; never create per-minute no-op continuations.
+        if(interval!==null)next=await pollTask(rt,task,interval);
         break;
       }
       default:throw new Error('Unsupported durable task kind');

@@ -1,4 +1,6 @@
 import type {Env} from '../types';
+import {pollEligibilitySql} from './eligibility';
+import {pollIntervalSeconds} from '../runtime';
 
 export type TaskKind='normalize'|'plan'|'dispatch'|'comments'|'messages';
 export interface Task {id:string;generation:number;kind:TaskKind;reference:string;revision:number;lease_token:string;next_at_ms:number;failures:number}
@@ -16,9 +18,10 @@ export async function publishTasks(env:Env,db:D1Database,generation:number,limit
   if(!env.WORK_QUEUE||!env.SEND_QUEUE)throw new Error('Configure both WORK_QUEUE and SEND_QUEUE before enabling task execution');
   const t=Date.now(),owner=crypto.randomUUID();
   const result=await db.prepare(`UPDATE work_tasks SET notification_token=?,notification_until_ms=? WHERE id IN(
-    SELECT id FROM work_tasks WHERE generation=? AND status='pending' AND next_at_ms<=? AND notification_until_ms<=?
+    SELECT id FROM work_tasks WHERE generation=? AND status='pending' AND suspend_reason IS NULL AND next_at_ms<=? AND notification_until_ms<=?
+    AND ${pollEligibilitySql}
     ORDER BY next_at_ms,updated_at_ms,id LIMIT ?) RETURNING id,generation,kind,reference,revision`)
-    .bind(owner,t+90_000,generation,t,t,Math.max(1,Math.min(4,limit))).all<Task>();
+    .bind(owner,t+90_000,generation,t,t,pollIntervalSeconds(env)!==null?1:0,Math.floor(t/1000),Math.max(1,Math.min(4,limit))).all<Task>();
   let sent=0;
   for(const task of result.results){
     try{await (task.kind==='dispatch'?env.SEND_QUEUE:env.WORK_QUEUE).send({schema:1,taskId:task.id,generation});sent++;}
@@ -27,11 +30,12 @@ export async function publishTasks(env:Env,db:D1Database,generation:number,limit
   }
   return sent;
 }
-export async function claimTask(db:D1Database,id:string,generation:number):Promise<Task|null>{
+export async function claimTask(db:D1Database,id:string,generation:number,pollingEnabled=true):Promise<Task|null>{
   const t=Date.now(),owner=crypto.randomUUID();
   return db.prepare(`UPDATE work_tasks SET status='leased',lease_token=?,lease_until_ms=?,updated_at_ms=?
-    WHERE id=? AND generation=? AND next_at_ms<=? AND (status='pending' OR(status='leased' AND lease_until_ms<?)) RETURNING *`)
-    .bind(owner,t+45_000,t,id,generation,t,t).first<Task>();
+    WHERE id=? AND generation=? AND suspend_reason IS NULL AND next_at_ms<=? AND (status='pending' OR(status='leased' AND lease_until_ms<?))
+    AND ${pollEligibilitySql} RETURNING *`)
+    .bind(owner,t+45_000,t,id,generation,t,t,pollingEnabled?1:0,Math.floor(t/1000)).first<Task>();
 }
 export async function settleTask(db:D1Database,task:Task,nextAt?:number):Promise<void>{
   const t=Date.now();

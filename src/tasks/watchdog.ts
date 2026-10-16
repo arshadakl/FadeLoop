@@ -3,6 +3,7 @@ import {buildRuntime,pollIntervalSeconds} from '../runtime';
 import {publishTasks,taskStatement} from './store';
 import {claimPollSlot} from '../db';
 import {cleanupTaskRetention} from './retention';
+import {reconcilePollEligibility} from './eligibility';
 
 /** Bounded repair. D1 is the long-lived queue; transport expiry cannot erase accepted work. */
 export async function taskWatchdog(env:Env):Promise<void>{
@@ -36,6 +37,7 @@ export async function taskWatchdog(env:Env):Promise<void>{
       db.prepare(`INSERT OR IGNORE INTO work_tasks(id,generation,kind,reference,updated_at_ms) VALUES(?,?,'messages','conversations',?)`).bind(`messages:${generation}:conversations`,generation,t),
     ]);
   }
+  await reconcilePollEligibility(env,db,generation);
   await publishTasks(env,db,generation,2);
   await cleanupTaskRetention(db,t);
 }
