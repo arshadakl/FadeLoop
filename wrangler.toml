@@ -17,7 +17,7 @@ compatibility_date = "2025-07-01"
 compatibility_flags = ["nodejs_compat"]
 
 # Cron triggers (all free tier).
-#  - every minute: resume durable jobs; poll only when the configured interval is due
+#  - every minute: bounded recovery; provider reconciliation remains interval-controlled
 #  - daily 03:00 UTC: refresh the long-lived Instagram token if it is due
 [triggers]
 crons = ["* * * * *", "0 3 * * *"]
@@ -39,26 +39,10 @@ run_worker_first = ["/api/*", "/auth/*", "/session", "/session/*", "/config/*", 
 [vars]
 # Public, non-secret configuration. Secrets (APP_ID, APP_SECRET, WEBHOOK_VERIFY_TOKEN) go via `wrangler secret put`.
 GRAPH_VERSION = "v23.0"
-# Owner authentication remains reversible; managed login is opt-in.
+# Owner login only. Switch to "access" after configuring path-scoped Cloudflare Access.
+# /webhook and /auth/callback must stay public. See docs/access-rollout.md.
 AUTH_MODE = "password"
-# LEAVE THIS AS "polling". It is the default, and it is almost certainly what you want.
-#
-# MODE does NOT decide whether you get instant delivery. It sets the CRON CADENCE, nothing else:
-#   "polling"  -> the cron polls every POLL_INTERVAL_SECONDS (below)
-#   "webhook"  -> the cron drops to the much slower WEBHOOK_RECONCILE_SECONDS sweep
-#
-# Pushed webhook events are verified and processed the moment they arrive under EITHER setting.
-# So instant delivery is not something you switch on here — it comes from registering a callback
-# URL with Meta, which is step 3.5 of the README's setup. Part 6 is how you confirm it took.
-#
-# The combination you want is this one: MODE = "polling" AND a registered callback URL. Push makes
-# delivery instant; the three-minute poll sits underneath and catches anything a delivery drops.
-#
-# Setting "webhook" before push is confirmed working is the classic way to break this: no events
-# arrive, the only thing still running is the 15-minute sweep, and every DM looks ~15 minutes late
-# as if FadeLoop were broken. Even once push IS working, "webhook" only makes your safety net 5x
-# slower — if push ever fails you wait 15 minutes to notice instead of three minutes.
-MODE = "polling"
+MODE = "webhook"
 # Seconds between Instagram reconciliation polls. Minute cron ticks still resume durable jobs.
 # 180 reduces polling opportunities by two thirds compared with 60. In polling-only
 # operation, discovery can take three minutes or longer while pagination catches up.

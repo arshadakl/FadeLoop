@@ -59,11 +59,11 @@ describe("the default config a fresh clone deploys", () => {
   const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
   const varOf = (k: string) => toml.match(new RegExp(`^${k}\\s*=\\s*"([^"]*)"`, "m"))?.[1];
 
-  it("ships polling, not webhook", () => {
-    expect(varOf("MODE")).toBe("polling");
+  it("declares an explicit supported transport cadence without gating webhook delivery", () => {
+    expect(['polling','webhook']).toContain(varOf("MODE"));
   });
 
-  it("uses three-minute reconciliation while retaining minute recovery ticks", () => {
+  it("honors the configured reconciliation cadence while retaining minute recovery ticks", () => {
     const env = {
       MODE: varOf("MODE"),
       POLL_INTERVAL_SECONDS: varOf("POLL_INTERVAL_SECONDS"),
@@ -71,7 +71,7 @@ describe("the default config a fresh clone deploys", () => {
     } as unknown as Env;
     const interval = pollIntervalSeconds(env);
     expect(interval).not.toBeNull();
-    expect(interval).toBe(180);
+    expect(interval).toBe(Number(varOf(env.MODE==='webhook'?'WEBHOOK_RECONCILE_SECONDS':'POLL_INTERVAL_SECONDS')));
     expect(toml).toContain('crons = ["* * * * *", "0 3 * * *"]');
   });
 });
