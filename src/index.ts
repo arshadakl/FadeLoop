@@ -15,6 +15,7 @@ import { handleConfigExport, handleConfigImport } from "./routes/config";
 import { handleWebhookAdmin, handleWebhookEvent, handleWebhookVerify } from "./routes/webhook";
 import { handleApi } from "./routes/api";
 import { json } from "./routes/http";
+import {cleanupRetention} from './reliability/retention';
 import { getSession, handleSession, sameOrigin } from "./auth/session";
 
 const POLL_CRON = "* * * * *";
@@ -49,14 +50,7 @@ export default {
       console.log(`[FadeLoop] token refresh: ${result.status}`);
       // Nightly maintenance retention sweep: prune old rate limit attempts and completed events
       try {
-        const nowSec = Math.floor(Date.now() / 1000);
-        await env.DB.batch([
-          env.DB.prepare("DELETE FROM send_attempts WHERE dispatched_at < ?").bind(nowSec - 86400),
-          env.DB.prepare("DELETE FROM inbound_events WHERE status = 'done' AND created_at < ?").bind(nowSec - 7 * 86400),
-          env.DB.prepare("DELETE FROM automation_audit WHERE created_at < ?").bind((nowSec - 30 * 86400) * 1000),
-          env.DB.prepare("DELETE FROM conversations WHERE lifecycle IN ('completed', 'closed', 'failed') AND updated_at < ?").bind(nowSec - 90 * 86400),
-          env.DB.prepare("DELETE FROM events WHERE created_at < ?").bind(nowSec - 90 * 86400),
-        ]);
+        await cleanupRetention(env.DB);
         console.log("[FadeLoop] nightly retention cleanup completed");
       } catch (err) {
         console.warn(`[FadeLoop] nightly retention cleanup failed: ${err instanceof Error ? err.message : err}`);
