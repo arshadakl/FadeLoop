@@ -197,14 +197,6 @@ export class Engine {
   }
   private async planMessage(event: NormalizedMessage, eventId: string): Promise<boolean> {
     if(!Number.isFinite(event.timestamp)||event.timestamp<=0)return false;
-    const rows = await this.db.prepare(`SELECT c.*,p.instance_id,p.active,p.archived_at,p.active_since,p.config_json,
-      EXISTS(SELECT 1 FROM legacy_campaign_instances l WHERE l.campaign_id=p.campaign_id AND l.instance_id=p.instance_id) legacy_instance,
-      (SELECT request_json FROM outbound_jobs WHERE campaign_instance=c.campaign_instance AND recipient=c.igsid AND action='opening') opening_request,
-      (SELECT request_json FROM outbound_jobs WHERE campaign_instance=c.campaign_instance AND recipient=c.igsid AND action='follow_gate') follow_request FROM conversations c
-      JOIN campaigns p ON p.campaign_id=c.campaign_id AND p.instance_id=c.campaign_instance WHERE c.igsid=?
-      ORDER BY CASE c.state WHEN 'AWAITING_EMAIL' THEN 3 WHEN 'AWAITING_FOLLOW' THEN 2 ELSE 1 END DESC,c.created_at DESC`)
-      .bind(event.igsid).all<Conversation & CampaignRecord & {opening_request:string|null;follow_request:string|null;legacy_instance:number}>();
-    const open = rows.results.filter(c=>c.state!=='DONE' && c.lifecycle==='active');
     let tokenJob: OutboundJob | null = null;
     if (event.payload?.startsWith('FL1:')) {
       tokenJob = await this.db.prepare('SELECT * FROM outbound_jobs WHERE id=? AND generation=? AND recipient=?')
@@ -214,6 +206,15 @@ export class Engine {
       if(tokenJob.attempts===0 && tokenJob.status!=='unknown')return this.holdEvent(eventId,'Button dispatch has not been established');
       if (tokenJob.status === 'unknown') {await this.confirm(tokenJob,tokenJob.owner_token,'postback');return false;}
     }
+    const rows = await this.db.prepare(`SELECT c.*,p.instance_id,p.active,p.archived_at,p.active_since,p.config_json,
+      EXISTS(SELECT 1 FROM legacy_campaign_instances l WHERE l.campaign_id=p.campaign_id AND l.instance_id=p.instance_id) legacy_instance,
+      (SELECT request_json FROM outbound_jobs WHERE campaign_instance=c.campaign_instance AND recipient=c.igsid AND action='opening') opening_request,
+      (SELECT request_json FROM outbound_jobs WHERE campaign_instance=c.campaign_instance AND recipient=c.igsid AND action='follow_gate') follow_request FROM conversations c
+      JOIN campaigns p ON p.campaign_id=c.campaign_id AND p.instance_id=c.campaign_instance WHERE c.igsid=?
+      ${tokenJob?'AND c.campaign_instance=?':''}
+      ORDER BY CASE c.state WHEN 'AWAITING_EMAIL' THEN 3 WHEN 'AWAITING_FOLLOW' THEN 2 ELSE 1 END DESC,c.created_at DESC`)
+      .bind(...(tokenJob?[event.igsid,tokenJob.campaign_instance]:[event.igsid])).all<Conversation & CampaignRecord & {opening_request:string|null;follow_request:string|null;legacy_instance:number}>();
+    const open = rows.results.filter(c=>c.state!=='DONE' && c.lifecycle==='active');
     const payload = parsePayload(event.payload);
     if(!tokenJob && event.payload && !['OPENING_TAP','FOLLOW_CONFIRM'].includes(payload.kind??''))return true;
     if(!tokenJob && payload.kind && !open.some(c=>c.legacy_instance && (!payload.campaignId||payload.campaignId===c.campaign_id)))return true;
