@@ -17,6 +17,8 @@ import { handleApi } from "./routes/api";
 import { json } from "./routes/http";
 import {cleanupRetention} from './reliability/retention';
 import { getSession, handleSession, sameOrigin } from "./auth/session";
+import {getOwnerSession} from './auth/owner';
+import {AccessConfigurationError} from './auth/access';
 
 const POLL_CRON = "* * * * *";
 const REFRESH_CRON = "0 3 * * *";
@@ -26,6 +28,7 @@ export default {
     env = {...env, DB:budgetDatabase(env.DB, 40)};
     let result: Response;
     try { result = await routeRequest(req, env, ctx); } catch (error) {
+      if (error instanceof AccessConfigurationError) return json({error:error.message},503);
       if (String(error).includes('UNIQUE constraint failed: campaigns.media_id')) {
         const rows=await env.DB.prepare('SELECT campaign_id,media_id FROM campaigns WHERE active=1 AND archived_at IS NULL').all();
         return json({error:'Only one automation may be active per post',conflicts:rows.results},409);
@@ -83,7 +86,7 @@ async function routeRequest(req: Request, env: Env, ctx?: ExecutionContext): Pro
 
     // --- owner-only API + admin routes ---
     if (pathname.startsWith("/api/")) {
-      if (!await getSession(req, env.DB)) return json({ error: "unauthorized" }, 401);
+      if (!await getOwnerSession(req, env)) return json({ error: "unauthorized" }, 401);
       if (!["GET", "HEAD"].includes(method) && !sameOrigin(req)) return json({ error: "Forbidden origin" }, 403);
       const scoped = ["GET", "HEAD"].includes(method) ? env : { ...env, DB: guardedConnectionDb(env.DB, await connectionGeneration(env.DB)) };
       return handleApi(scoped, req, url);
@@ -98,7 +101,7 @@ async function routeRequest(req: Request, env: Env, ctx?: ExecutionContext): Pro
       "/admin/webhook",
     ]);
     if (ownerRoutes.has(pathname)) {
-      const session = await getSession(req, env.DB);
+      const session = await getOwnerSession(req, env);
       if (!session) return json({ error: "unauthorized" }, 401);
       if ((!["GET", "HEAD"].includes(method) || pathname === "/auth/authorize") && !sameOrigin(req, pathname === "/auth/authorize")) return json({ error: "Forbidden origin" }, 403);
       if (pathname === "/auth/authorize" && method === "GET") return handleAuthorize(env, session);

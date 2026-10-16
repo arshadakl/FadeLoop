@@ -1,4 +1,4 @@
-// Native WebCrypto PBKDF2 password hashing (runs in <1.5ms in V8 C++, zero-WASM overhead on Cloudflare Workers)
+// Password hashing is intentionally expensive. Native WebCrypto is not a Free CPU-budget guarantee.
 // Backwards-compatible verification for existing $argon2id$ hashes with automatic upgrade.
 import { argon2id } from "./vendor/argon2.js";
 

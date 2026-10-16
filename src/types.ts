@@ -16,6 +16,13 @@ export interface Env {
   REDIRECT_URI: string;
   AUTOMATION_MAINTENANCE?: string;
   BUILD_REVISION?: string;
+  /** Owner authentication only. Never controls Meta webhooks or automation. */
+  AUTH_MODE?: "password" | "access";
+  ACCESS_ISSUER?: string;
+  ACCESS_AUDIENCE?: string;
+  ACCESS_OWNER_SUBJECT?: string;
+  /** Separate Access application enforcing fresh user verification for destructive actions. */
+  ACCESS_ACTION_AUDIENCE?: string;
 
   // secrets (wrangler secret put ...)
   APP_ID: string;

@@ -59,6 +59,7 @@ export interface Preferences {
 }
 export function App() {
   const [session, setSession] = useState<Session | null | undefined>();
+  const [authMode, setAuthMode] = useState<'password'|'access'>('password');
   const [message, setMessage] = useState("");
   const [bootKey, setBootKey] = useState(0);
   const [workspaceReset, setWorkspaceReset] = useState(0);
@@ -68,7 +69,8 @@ export function App() {
       localStorage.removeItem("fadeloop_token");
       localStorage.removeItem("chatmany_token");
     } catch {}
-    api<Session>("/session", { signal: controller.signal, session: false })
+    api<{auth_mode:'password'|'access'}>('/session/config',{signal:controller.signal,session:false})
+      .then(config => { if (!controller.signal.aborted) setAuthMode(config.auth_mode); return api<Session>("/session", { signal: controller.signal, session: false }); })
       .then((value) => {
         if (!controller.signal.aborted) setSession(value);
       })
@@ -116,6 +118,7 @@ export function App() {
   if (!session)
     return (
       <Login
+        authMode={authMode}
         message={message}
         onLogin={setSession}
         retry={() => {
@@ -139,10 +142,12 @@ export function App() {
   );
 }
 function Login({
+  authMode,
   message,
   onLogin,
   retry,
 }: {
+  authMode: 'password'|'access';
   message: string;
   onLogin(s: Session): void;
   retry(): void;
@@ -154,6 +159,7 @@ function Login({
   const email = useRef<HTMLInputElement>(null);
   const password = useRef<HTMLInputElement>(null);
   useEffect(() => setError(message), [message]);
+  if (authMode === 'access') return <main className="login-page"><section className="login-card"><Brand /><h1>Welcome back</h1><p>Sign in securely to manage your automations.</p>{error && <Failure message={error} />}<Button className="sign-in-button" onClick={() => location.assign('/session/access')}>Continue with Cloudflare Access</Button><footer><a href="/privacy">Privacy</a><a href="/terms">Terms</a><Button variant="ghost" onClick={() => setAppearance(true)}>Appearance</Button></footer><AccountDialog open={appearance} onOpenChange={setAppearance} /></section></main>;
   return (
     <main className="login-page">
       <section className="login-card">
@@ -676,9 +682,9 @@ function AccountDialog({
             }))}
           />
         </div>
-        {session && onSession && <PasswordSettings key={String(open)} changed={onSession} />}
+        {session && onSession && (session.auth_mode === 'access' ? <p>Sign-in is managed by Cloudflare Access. Your saved password remains available if your administrator switches back to password login.</p> : <PasswordSettings key={String(open)} changed={onSession} />)}
         {session && <AutomationSafety key={`automation-${open}`} />}
-        {connection?.connected && onDisconnect && <DisconnectSettings status={connection} dirty={dirty} done={onDisconnect} />}
+        {connection?.connected && onDisconnect && <DisconnectSettings status={connection} dirty={dirty} done={onDisconnect} authMode={session?.auth_mode} />}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline">

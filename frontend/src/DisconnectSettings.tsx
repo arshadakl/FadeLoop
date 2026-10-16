@@ -7,7 +7,7 @@ import { Input } from "./components/ui/input";
 import { Field } from "./components/shared";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./components/ui/dialog";
 
-export function DisconnectSettings({ status, dirty, done }: { status: Status; dirty: boolean; done(): void }) {
+export function DisconnectSettings({ status, dirty, done, authMode = 'password' }: { status: Status; dirty: boolean; done(): void; authMode?: 'password'|'access' }) {
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
@@ -61,15 +61,17 @@ export function DisconnectSettings({ status, dirty, done }: { status: Status; di
         <p>{dirty ? "Your unsaved builder changes will also be discarded." : "Any unsaved builder changes will also be discarded."}</p>
         <p className="muted">This disconnects this workspace only. Messages already sent to Instagram cannot be recalled.</p>
         <form onSubmit={e => { e.preventDefault(); void submit(); }}>
+          {authMode === 'access' ? <p>Disconnect requires fresh verification through your administrator's separate Access application. Password verification is disabled while Access login is active.</p> : <>
           <Field label="FadeLoop login password">
             <Input name="password" autoComplete="current-password" type={visible ? "text" : "password"} value={password} disabled={busy || uncertain} onChange={e => setPassword(e.target.value)} required maxLength={256} />
           </Field>
           <Button type="button" variant="ghost" aria-pressed={visible} disabled={busy} onClick={() => setVisible(v => !v)}>{visible ? <EyeOff /> : <Eye />}{visible ? "Hide password" : "Show password"}</Button>
+          </>}
           {message && <p role="alert">{message}</p>}
           {uncertain && <Button type="button" variant="outline" disabled={busy} onClick={async () => { if (lock.current) return; lock.current = true; setBusy(true); try { await checkOutcome(); } finally { lock.current = false; setBusy(false); } }}>Check connection status</Button>}
           <div className="disconnect-actions">
             <Button type="button" variant="outline" disabled={busy} onClick={() => close(false)}>Cancel</Button>
-            <Button type="submit" variant="destructive" disabled={busy || uncertain || !password}>{busy ? "Disconnecting and deleting…" : "Disconnect and delete everything"}</Button>
+            <Button type="submit" variant="destructive" disabled={busy || uncertain || !password || authMode === 'access'}>{busy ? "Disconnecting and deleting…" : "Disconnect and delete everything"}</Button>
           </div>
         </form>
       </DialogContent>

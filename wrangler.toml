@@ -39,6 +39,8 @@ run_worker_first = ["/api/*", "/auth/*", "/session", "/session/*", "/config/*", 
 [vars]
 # Public, non-secret configuration. Secrets (APP_ID, APP_SECRET, WEBHOOK_VERIFY_TOKEN) go via `wrangler secret put`.
 GRAPH_VERSION = "v23.0"
+# Owner authentication remains reversible; managed login is opt-in.
+AUTH_MODE = "password"
 # LEAVE THIS AS "polling". It is the default, and it is almost certainly what you want.
 #
 # MODE does NOT decide whether you get instant delivery. It sets the CRON CADENCE, nothing else:

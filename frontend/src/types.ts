@@ -53,6 +53,7 @@ export interface Status {
   comment_poll_error?: {at:number;message:string} | null;
 }
 export interface Session {
+  auth_mode?: 'password' | 'access';
   email: string;
   expires_at: number;
 }

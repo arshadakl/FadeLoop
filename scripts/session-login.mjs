@@ -9,6 +9,9 @@ if (process.argv.length > 3 || url.pathname !== '/' || url.search || url.hash ||
   throw new Error('Usage: npm run session:login -- https://your-worker.example (localhost HTTP is allowed).');
 }
 if (!process.stdin.isTTY) throw new Error('Use an interactive terminal; passwords are never accepted as arguments.');
+const authConfig=await fetch(new URL('/session/config',url),{redirect:'error'});
+if(!authConfig.ok)throw new Error('Cannot determine authentication mode. Open the workspace in your browser.');
+if((await authConfig.json()).auth_mode==='access')throw new Error('This workspace uses Cloudflare Access. Open /session/access in your browser; password login is disabled.');
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const email = await new Promise(resolve => rl.question('Owner email: ', resolve)); rl.close();
 emitKeypressEvents(process.stdin); process.stdin.setRawMode(true); process.stdin.resume();

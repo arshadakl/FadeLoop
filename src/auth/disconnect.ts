@@ -3,9 +3,11 @@ import { boundedBody, digest, getSession, sameOrigin, timestamp } from "./sessio
 import { validPassword, verifyPassword } from "./password";
 import { connectionGeneration } from "../connection";
 import { json } from "../routes/http";
+import {getOwnerSession} from './owner';
+import {ownerAuthMode, verifyAccess} from './access';
 
 export async function disconnectInstagram(req: Request, env: Env): Promise<Response> {
-  const session = await getSession(req, env.DB);
+  const session = await getOwnerSession(req, env);
   if (!session) return json({ error: "Your session has expired. Please sign in again." }, 401);
   if (!sameOrigin(req)) return json({ error: "Forbidden origin" }, 403);
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get("content-type") ?? "")) return json({ error: "JSON required" }, 415);
@@ -28,12 +30,20 @@ export async function disconnectInstagram(req: Request, env: Env): Promise<Respo
     return response;
   }
   const owner = await env.DB.prepare("SELECT password_hash, credential_version FROM owner_accounts WHERE id = 1").first<{ password_hash: string; credential_version: number }>();
-  if (!validPassword(body.password) || !owner || !await verifyPassword(body.password, owner.password_hash)) return json({ error: "Incorrect FadeLoop login password." }, 403);
+  if (ownerAuthMode(env) === 'access') {
+    if (!env.ACCESS_ACTION_AUDIENCE) return json({error:'Configure a fresh-verification Access application before disconnecting in Access mode'},409);
+    const identity = await verifyAccess(req,env,true);
+    if (!identity || identity.email !== session.email.trim().toLowerCase()) return json({error:'Fresh Access verification is required to disconnect'},403);
+  } else if (!validPassword(body.password) || !owner || !await verifyPassword(body.password, owner.password_hash)) return json({ error: "Incorrect FadeLoop login password." }, 403);
+  if (!owner) return json({error:'Owner account unavailable'},401);
   if (owner.credential_version !== session.credential_version || !await getSession(req, env.DB)) return json({ error: "Your session has expired. Please sign in again." }, 401);
   const liveGeneration = await connectionGeneration(env.DB);
   const connected = await env.DB.prepare("SELECT id FROM auth WHERE id = 1").first();
   if (!connected && liveGeneration === generation + 1) return json({ disconnected: true, deleted: true });
   if (!connected || liveGeneration !== generation) return json({ error: "Instagram connection changed. Refresh before disconnecting." }, 409);
+  // Access can be rolled out before the expand-only task migration. Only include
+  // these fixed, application-owned table names when that schema is present.
+  const taskTables = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('work_tasks','ingress_batches')").all<{ name: string }>();
   try {
     await env.DB.batch([
       // Reject stale sessions and stale connections inside the same transaction as every delete.
@@ -44,6 +54,7 @@ export async function disconnectInstagram(req: Request, env: Env): Promise<Respo
           AND s.expires_at > CAST(strftime('%s', 'now') AS INTEGER))
         THEN generation + 1 ELSE -1 END WHERE id = 1`).bind(generation, session.token_hash, session.credential_version),
       ...["campaign_folders", "campaign_trigger_activation", "conversations", "events", "processed_comments", "comment_actions", "send_claims", "outbound_jobs", "inbound_events", "send_attempts", "polling_checkpoints", "automation_audit", "campaign_conflicts", "legacy_campaign_instances", "campaigns", "automation_folders", "owner_oauth_states", "kv", "auth"].map(table => env.DB.prepare(`DELETE FROM ${table}`)),
+      ...taskTables.results.map(({name}) => env.DB.prepare(name === 'work_tasks' ? 'DELETE FROM work_tasks' : 'DELETE FROM ingress_batches')),
       env.DB.prepare("UPDATE automation_control SET enabled=0,hold_reason=NULL,cutover_at=? WHERE id=1").bind(current),
     ]);
   } catch {

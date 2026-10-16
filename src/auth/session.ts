@@ -1,6 +1,8 @@
 import type { Env } from "../types";
-import { json } from "../routes/http";
+import { json, html, redirect } from "../routes/http";
 import { hashPassword, normalizeEmail, validPassword, verifyPassword } from "./password";
+import {ownerAuthMode, verifyAccess} from './access';
+import {getOwnerSession} from './owner';
 
 const COOKIE = "__Host-fadeloop_session";
 const LIFETIME = 7 * 86400;
@@ -68,9 +70,27 @@ export async function boundedBody(req: Request): Promise<string | null> {
 
 export async function handleSession(req: Request, env: Env, pathname: string): Promise<Response> {
   const method = req.method.toUpperCase();
+  const mode = ownerAuthMode(env);
+  if (pathname === '/session/config' && method === 'GET') return json({auth_mode:mode});
+  if (pathname === '/session/access' && mode === 'access') {
+    if (!['GET','POST'].includes(method)) return json({error:'method not allowed'},405);
+    if (method === 'POST' && !sameOrigin(req)) return json({error:'Forbidden origin'},403);
+    const identity = await verifyAccess(req, env);
+    if (!identity) return json({error:'Cloudflare Access authentication required. Protect /session/access with Access.'},401);
+    if (method === 'GET') return html('<form method="post" action="/session/access"><h1>Continue to FadeLoop</h1><p>Your identity was verified by Cloudflare Access.</p><button>Sign in</button></form>');
+    const owner = await env.DB.prepare('SELECT email,credential_version FROM owner_accounts WHERE id=1').first<{email:string;credential_version:number}>();
+    if (!owner || normalizeEmail(owner.email) !== identity.email) return json({error:'This identity is not the workspace owner'},403);
+    const token = randomToken(), tokenHash = await digest(token), expires = Math.min(timestamp()+LIFETIME,identity.exp);
+    const result = await env.DB.prepare(`INSERT INTO owner_sessions(token_hash,owner_id,credential_version,expires_at,created_at)
+      SELECT ?,id,credential_version,?,? FROM owner_accounts WHERE id=1 AND credential_version=? AND email=?`)
+      .bind(tokenHash,expires,timestamp(),owner.credential_version,owner.email).run();
+    if (!result.meta.changes) return json({error:'Owner account changed; sign in again'},401);
+    const response = req.headers.get('accept')?.includes('text/html') ? redirect('/',303) : json({email:owner.email,expires_at:expires,auth_mode:mode});
+    response.headers.set('set-cookie',cookie(token,expires-timestamp())); response.headers.set('cache-control','no-store'); return response;
+  }
   if (pathname === "/session" && method === "GET") {
-    const session = await getSession(req, env.DB);
-    return json(session ? { email: session.email, expires_at: session.expires_at } : { error: "unauthorized" }, session ? 200 : 401);
+    const session = await getOwnerSession(req, env);
+    return json(session ? { email: session.email, expires_at: session.expires_at, ...(mode === 'access' ? {auth_mode:mode} : {}) } : { error: "unauthorized" }, session ? 200 : 401);
   }
   if (method !== "POST" || !["/session/login", "/session/logout", "/session/password"].includes(pathname)) return json({ error: "method not allowed" }, 405);
   if (!sameOrigin(req)) return json({ error: "Forbidden origin" }, 403);
@@ -79,6 +99,7 @@ export async function handleSession(req: Request, env: Env, pathname: string): P
     if (session) await env.DB.prepare("DELETE FROM owner_sessions WHERE token_hash = ?").bind(session.token_hash).run();
     return sessionResponse({ ok: true }, "", 0);
   }
+  if (mode === 'access') return json({error:'Password authentication is disabled. Sign in through Cloudflare Access.',auth_mode:mode},409);
   if (pathname === "/session/password") return changePassword(req, env);
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get("content-type") ?? "")) return json({ error: "JSON required" }, 415);
   const text = await boundedBody(req);
