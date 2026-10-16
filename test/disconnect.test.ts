@@ -48,6 +48,19 @@ function request(body: unknown = { password, connection_generation: 0 }, headers
 async function count(db: D1Database, table: string) { return (await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())!.n; }
 
 describe("password-confirmed workspace reset", () => {
+  it("purges raw envelopes and durable intents in the reset transaction", async () => {
+    const { env, db, raw } = await fixture();
+    raw.exec("INSERT INTO ingress_batches(id,generation,source,raw_json,created_at_ms,updated_at_ms) VALUES('raw',0,'webhook','{}',0,0); INSERT INTO work_tasks(id,generation,kind,reference,updated_at_ms) VALUES('task',0,'normalize','raw',0)");
+    raw.exec("CREATE TRIGGER refuse_task_reset BEFORE DELETE ON work_tasks BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+    expect((await worker.fetch(request(), env)).status).toBe(500);
+    expect(await count(db, 'ingress_batches')).toBe(1);
+    expect(await count(db, 'campaigns')).toBe(3);
+    expect(await connectionGeneration(db)).toBe(0);
+    raw.exec('DROP TRIGGER refuse_task_reset');
+    expect((await worker.fetch(request(), env)).status).toBe(200);
+    expect(await count(db, 'work_tasks')).toBe(0);
+    expect(await count(db, 'ingress_batches')).toBe(0);
+  });
   it("deletes every workspace table, preserves owner/session/throttles and increments generation", async () => {
     const { env, db } = await fixture();
     for (const table of deletedTables) expect(await count(db, table)).toBeGreaterThan(0);
@@ -145,12 +158,15 @@ describe("password-confirmed workspace reset", () => {
   });
   it("a campaign request whose body arrives after disconnect/reconnect cannot save into the new connection", async () => {
     const { env, db } = await fixture();
-    const req = new Request(origin + "/api/campaigns", { method: "POST", headers: request().headers, body: "{}" });
-    vi.spyOn(req, "json").mockImplementation(async () => {
+    const req = new Request(origin + "/api/campaigns", { method: "POST", headers: request().headers, body: JSON.stringify({campaign,active:true}) });
+    const reader=req.body!.getReader();let changed=false;
+    vi.spyOn(req.body! as {getReader():ReadableStreamDefaultReader<Uint8Array>}, "getReader").mockReturnValue({read:async()=>{
+      if(!changed){changed=true;
       expect((await disconnectInstagram(request(), env)).status).toBe(200);
       await saveAuth(db, { access_token: "new", expires_at: timestamp() + 100 }, { generation: 1, sessionHash: await digest(token), credentialVersion: 1 });
-      return { campaign, active: true };
-    });
+      }
+      return reader.read();
+    },releaseLock:()=>reader.releaseLock(),cancel:()=>reader.cancel()} as ReadableStreamDefaultReader<Uint8Array>);
     expect((await worker.fetch(req, env)).status).toBe(409);
     expect(await count(db, "campaigns")).toBe(0);
   });
@@ -184,11 +200,15 @@ describe("password-confirmed workspace reset", () => {
     const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
     const signature = "sha256=" + [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, "0")).join("");
     const req = new Request(origin + "/webhook", { method: "POST", body: raw, headers: { "x-hub-signature-256": signature } });
-    vi.spyOn(req, "text").mockImplementation(async () => {
+    const reader=req.body!.getReader();
+    let changed=false;
+    vi.spyOn(req.body! as {getReader():ReadableStreamDefaultReader<Uint8Array>}, "getReader").mockReturnValue({read:async()=>{
+      if(!changed){changed=true;
       expect((await disconnectInstagram(request(), env)).status).toBe(200);
       await saveAuth(db, { access_token: "new", expires_at: timestamp() + 100 }, { generation: 1, sessionHash: await digest(token), credentialVersion: 1 });
-      return raw;
-    });
+      }
+      return reader.read();
+    },releaseLock:()=>reader.releaseLock(),cancel:()=>reader.cancel()} as ReadableStreamDefaultReader<Uint8Array>);
     expect((await handleWebhookEvent(env, req)).status).toBe(200);
     expect(await count(db, "conversations")).toBe(0);
     expect(await count(db, "events")).toBe(0);

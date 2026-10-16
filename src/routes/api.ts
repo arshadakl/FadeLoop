@@ -22,10 +22,19 @@ import { getCommentPollError } from "../poller/commentPoll";
 import type { Env } from "../types";
 import { json } from "./http";
 import { folders, validFolder } from "./folders";
+import {readBoundedBytes} from './body';
+import {taskStatus,retryTask} from '../tasks/status';
 
 export async function handleApi(env: Env, req: Request, url: URL): Promise<Response> {
   const path = url.pathname;
   const method = req.method.toUpperCase();
+  if(method==='POST'){
+    const bytes=await readBoundedBytes(req,path==='/api/campaigns'?32*1024:16*1024);
+    if(bytes===null)return json({error:'Request exceeds the operation size limit'},413);
+    req=new Request(req,{body:bytes.buffer as ArrayBuffer});
+  }
+  if(path==='/api/automation/tasks'&&method==='GET')return taskStatus(env,url);
+  if(path==='/api/automation/tasks/retry'&&method==='POST')return retryTask(env,req);
   if(path==='/api/automation'||path.startsWith('/api/automation/'))return handleAutomation(env,req,url);
   if (path === "/api/folders" || path.startsWith("/api/folders/")) return folders(env, req, path);
 
@@ -129,6 +138,7 @@ async function campaignSave(env: Env, req: Request): Promise<Response> {
     return json({ error: "invalid JSON" }, 400);
   }
   const payload = body as { campaign?: unknown; active?: boolean; folder_id?: unknown };
+  if(!payload||typeof payload!=='object'||Array.isArray(payload))return json({error:'invalid request'},400);
   if (payload.folder_id !== undefined && !await validFolder(env.DB, payload.folder_id)) return json({ error: "Folder not found" }, 404);
   let campaign;
   try {
@@ -260,7 +270,8 @@ function csv(v: string): string {
 
 async function safeJson(req: Request): Promise<Record<string, unknown>> {
   try {
-    return (await req.json()) as Record<string, unknown>;
+    const value=await req.json();
+    return value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
   } catch {
     return {};
   }

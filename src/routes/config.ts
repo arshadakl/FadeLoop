@@ -5,12 +5,15 @@ import { validateConfig } from "../config";
 import { getActiveCampaigns, campaignUpsertStatements } from "../db";
 import type { Env } from "../types";
 import { json } from "./http";
+import {readBoundedBytes} from './body';
 
 /** POST /config/import — body is a full config.json (Section 7). Owner-only. */
 export async function handleConfigImport(env: Env, req: Request): Promise<Response> {
+  const bytes=await readBoundedBytes(req,64*1024);
+  if(bytes===null)return json({error:'Configuration exceeds the 64 KiB import limit'},413);
   let payload: unknown;
   try {
-    payload = await req.json();
+    payload = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return json({ error: "invalid JSON body" }, 400);
   }
