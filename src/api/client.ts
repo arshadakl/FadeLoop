@@ -3,6 +3,9 @@
 // documented Graph API operations. Build only from Meta docs; verify endpoint paths
 // against the API version pinned in wrangler.toml (GRAPH_VERSION).
 
+import {ConnectionChangedError} from '../connection';
+import {readBoundedBytes} from '../routes/body';
+export class ProviderRequestNotStarted extends Error { constructor(){super('Provider request was not started; preflight unavailable');} }
 const GRAPH_HOST = "https://graph.instagram.com";
 export interface GraphPage<T> { data: T[]; cursor: string | null }
 function parseRetryAfter(value: string | null): number | undefined {
@@ -106,13 +109,16 @@ export class InstagramClient {
   private base(path: string): string {
     return `${GRAPH_HOST}/${this.version}${path.startsWith("/") ? path : `/${path}`}`;
   }
+  private async preflight():Promise<void>{
+    try{await this.beforeRequest();}catch(error){if(error instanceof ConnectionChangedError)throw error;throw new ProviderRequestNotStarted();}
+  }
 
   /** GET with query params; access_token appended automatically. */
   private async get<T>(path: string, params: Record<string, string> = {}): Promise<T> {
     const url = new URL(this.base(path));
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("access_token", this.accessToken);
-    await this.beforeRequest();
+    await this.preflight();
     const res = await fetch(url.toString(), { method: "GET", signal: AbortSignal.timeout(Math.max(1,Math.min(15_000,this.deadline-Date.now()))) });
     return this.parse<T>(res);
   }
@@ -125,7 +131,7 @@ export class InstagramClient {
     const url = new URL(this.base(path));
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("access_token", this.accessToken);
-    await this.beforeRequest();
+    await this.preflight();
     const res = await fetch(url.toString(), { method: "POST",signal:AbortSignal.timeout(Math.max(1,Math.min(15_000,this.deadline-Date.now()))) });
     return this.parse<T>(res);
   }
@@ -134,7 +140,7 @@ export class InstagramClient {
   private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
     const url = new URL(this.base(path));
     url.searchParams.set("access_token", this.accessToken);
-    await this.beforeRequest();
+    await this.preflight();
     const res = await fetch(url.toString(), {
       method: "POST",
       signal: AbortSignal.timeout(Math.max(1,Math.min(15_000,this.deadline-Date.now()))),
@@ -145,7 +151,9 @@ export class InstagramClient {
   }
 
   private async parse<T>(res: Response): Promise<T> {
-    const text = await res.text();
+    const bytes=await readBoundedBytes(res,256*1024);
+    if(!bytes)throw new Error('Provider response exceeded the supported byte limit');
+    const text = new TextDecoder().decode(bytes);
     let json: unknown = undefined;
     try {
       json = text ? JSON.parse(text) : undefined;
@@ -274,14 +282,14 @@ export class InstagramClient {
     return res.data ?? [];
   }
 
-  async getCommentsPage(mediaId: string, cursor?: string): Promise<GraphPage<IgComment>> {
-    return this.page(`/${mediaId}/comments`, {fields:'id,text,timestamp,username,from{id,username}',limit:'50'},cursor);
+  async getCommentsPage(mediaId: string, cursor?: string,limit=50): Promise<GraphPage<IgComment>> {
+    return this.page(`/${mediaId}/comments`, {fields:'id,text,timestamp,username,from{id,username}',limit:String(limit)},cursor);
   }
-  async getConversationsPage(cursor?: string): Promise<GraphPage<IgConversation>> {
-    return this.page(`/${this.igUserId}/conversations`,{platform:'instagram',fields:'id',limit:'20'},cursor);
+  async getConversationsPage(cursor?: string,limit=20): Promise<GraphPage<IgConversation>> {
+    return this.page(`/${this.igUserId}/conversations`,{platform:'instagram',fields:'id',limit:String(limit)},cursor);
   }
-  async getMessagesPage(threadId: string,cursor?:string): Promise<GraphPage<IgMessage>> {
-    return this.page(`/${threadId}/messages`,{fields:'id,from,to,message,created_time',limit:'50'},cursor);
+  async getMessagesPage(threadId: string,cursor?:string,limit=50): Promise<GraphPage<IgMessage>> {
+    return this.page(`/${threadId}/messages`,{fields:'id,from,to,message,created_time',limit:String(limit)},cursor);
   }
   private async page<T>(path:string,params:Record<string,string>,cursor?:string):Promise<GraphPage<T>> {
     const response=await this.get<{data?:T[];paging?:{next?:string;cursors?:{after?:string}}}>(path,{...params,...(cursor?{after:cursor}:{})});

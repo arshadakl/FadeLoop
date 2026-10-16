@@ -1,3 +1,4 @@
+import {ProviderRequestNotStarted} from '../api/client';
 import type { Runtime } from '../runtime';
 import type { NormalizedMessage } from '../types';
 import { checkpoint,beginPoll,pollFailure,readPollError,clearPollErrorStatement } from './checkpoint';
@@ -13,7 +14,7 @@ export async function pollMessages(rt:Runtime,db:D1Database):Promise<void>{
     let page;
     try{page=await rt.client.getConversationsPage(discovery.cursor??undefined);}
     catch(error){
-      if(error instanceof WorkBudgetExceeded||error instanceof ConnectionChangedError||error instanceof ConnectionCheckFailedError)throw error;
+      if(error instanceof WorkBudgetExceeded||error instanceof ConnectionChangedError||error instanceof ConnectionCheckFailedError||error instanceof ProviderRequestNotStarted)throw error;
       await pollFailure(db,ERROR_KEY,error,discovery);
     }
     if(page){
@@ -35,7 +36,7 @@ export async function pollMessages(rt:Runtime,db:D1Database):Promise<void>{
     let page;
     try{page=await rt.client.getMessagesPage(cp.key.slice(9),cp.cursor??undefined);}
     catch(error){
-      if(error instanceof WorkBudgetExceeded||error instanceof ConnectionChangedError||error instanceof ConnectionCheckFailedError)throw error;
+      if(error instanceof WorkBudgetExceeded||error instanceof ConnectionChangedError||error instanceof ConnectionCheckFailedError||error instanceof ProviderRequestNotStarted)throw error;
       await pollFailure(db,ERROR_KEY,error,cp);
     }
     if(page){

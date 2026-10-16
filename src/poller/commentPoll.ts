@@ -1,3 +1,4 @@
+import {ProviderRequestNotStarted} from '../api/client';
 import type { Runtime } from '../runtime';
 import type { NormalizedComment } from '../types';
 import { checkpoint,beginPoll,clearPollErrorStatement,pollFailure,readPollError } from './checkpoint';
@@ -17,7 +18,7 @@ export async function pollComments(rt:Runtime,db:D1Database):Promise<void>{
     const cp=await beginPoll(db,key,generation);if(!cp)continue;
     let page;
     try{page=await rt.client.getCommentsPage(row.media_id,cp.cursor??undefined);}
-    catch(error){if(error instanceof WorkBudgetExceeded||error instanceof ConnectionChangedError||error instanceof ConnectionCheckFailedError)throw error;await pollFailure(db,ERROR_KEY,error,cp);continue;}
+    catch(error){if(error instanceof WorkBudgetExceeded||error instanceof ConnectionChangedError||error instanceof ConnectionCheckFailedError||error instanceof ProviderRequestNotStarted)throw error;await pollFailure(db,ERROR_KEY,error,cp);continue;}
     const events:NormalizedComment[]=page.data.flatMap(c=>{
       const timestamp=c.timestamp?Math.floor(Date.parse(c.timestamp)/1000):0;
       if(c.from?.id===rt.igUserId||!Number.isFinite(timestamp)||timestamp<cp.boundary)return [];
