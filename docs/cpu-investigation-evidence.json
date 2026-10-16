@@ -1,0 +1,832 @@
+{
+  "audit_date": "2026-10-16",
+  "scope": "Current local working tree; no production access. Fixture provider calls only.",
+  "warning": "Operation counts and instrumented local wall time only. Neither these times nor sampled profiles are billed production CPU.",
+  "source_files": {
+    "src/index.ts": "616030650bbd125279fc71aa532ffb9fec75388439d8b5c68de354a5a1743d55",
+    "src/runtime.ts": "dd8ecede7fc12409e18a2ca6a5c1a195cb3f4e0131d5fe2c47c9984d242c643d",
+    "src/engine/engine.ts": "6effe0343bc281afde177975159e9d58b5d34f781f559228629f5e203e8c1004",
+    "src/poller/messagePoll.ts": "d81d00ed624990422d30e2fe399b9577f108e90e35d4e0abf509d95dfa5b01ba",
+    "wrangler.toml": "d3eb88ea6cb590b14bf19729b89f7cbb8af4ac33d3525bc88bd6e92ee15afdb9"
+  },
+  "invocations": [
+    {
+      "label": "health",
+      "path": "/health",
+      "status": 200,
+      "statements": 0,
+      "d1_calls": 0,
+      "connection_guards": 0,
+      "rows_read": 0,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 0,
+      "response_bytes": 37,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "invalid signature",
+      "path": "/webhook",
+      "status": 401,
+      "statements": 1,
+      "d1_calls": 1,
+      "connection_guards": 0,
+      "rows_read": 1,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 0,
+      "response_bytes": 17,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "valid empty webhook",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 5,
+      "d1_calls": 4,
+      "connection_guards": 1,
+      "rows_read": 6,
+      "rows_written": 1,
+      "fixture_bind_json_chars": 112,
+      "response_bytes": 16,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "idle scheduled poll",
+      "path": "/__cron",
+      "status": 200,
+      "statements": 33,
+      "d1_calls": 19,
+      "connection_guards": 10,
+      "rows_read": 45,
+      "rows_written": 31,
+      "fixture_bind_json_chars": 794,
+      "response_bytes": 11,
+      "provider_sends": 0,
+      "provider_reads": 2,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "webhook 1 unique comments",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 32,
+      "d1_calls": 17,
+      "connection_guards": 8,
+      "rows_read": 82,
+      "rows_written": 52,
+      "fixture_bind_json_chars": 3279,
+      "response_bytes": 16,
+      "provider_sends": 1,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 1,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "webhook 6 unique comments",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 73,
+      "d1_calls": 37,
+      "connection_guards": 17,
+      "rows_read": 235,
+      "rows_written": 164,
+      "fixture_bind_json_chars": 10402,
+      "response_bytes": 16,
+      "provider_sends": 3,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 3,
+        "confirmed": 3,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "webhook 50 unique comments",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 73,
+      "d1_calls": 37,
+      "connection_guards": 17,
+      "rows_read": 675,
+      "rows_written": 384,
+      "fixture_bind_json_chars": 26530,
+      "response_bytes": 16,
+      "provider_sends": 3,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 47,
+        "confirmed": 3,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "webhook 100 unique comments",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 73,
+      "d1_calls": 37,
+      "connection_guards": 17,
+      "rows_read": 1175,
+      "rows_written": 634,
+      "fixture_bind_json_chars": 44830,
+      "response_bytes": 16,
+      "provider_sends": 3,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 97,
+        "confirmed": 3,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "501 identical copies",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 32,
+      "d1_calls": 17,
+      "connection_guards": 8,
+      "rows_read": 82,
+      "rows_written": 52,
+      "fixture_bind_json_chars": 3279,
+      "response_bytes": 16,
+      "provider_sends": 1,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 1,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "repeat completed comment",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 10,
+      "d1_calls": 6,
+      "connection_guards": 3,
+      "rows_read": 23,
+      "rows_written": 3,
+      "fixture_bind_json_chars": 566,
+      "response_bytes": 16,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 1,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "unmatched comment",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 16,
+      "d1_calls": 10,
+      "connection_guards": 5,
+      "rows_read": 32,
+      "rows_written": 17,
+      "fixture_bind_json_chars": 831,
+      "response_bytes": 16,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "ambiguous send failure",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 30,
+      "d1_calls": 17,
+      "connection_guards": 8,
+      "rows_read": 75,
+      "rows_written": 44,
+      "fixture_bind_json_chars": 2516,
+      "response_bytes": 16,
+      "provider_sends": 1,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 1,
+        "sending": 0
+      }
+    },
+    {
+      "label": "opening before button",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 32,
+      "d1_calls": 17,
+      "connection_guards": 8,
+      "rows_read": 82,
+      "rows_written": 52,
+      "fixture_bind_json_chars": 3279,
+      "response_bytes": 16,
+      "provider_sends": 1,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 1,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "button direct delivery",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 30,
+      "d1_calls": 16,
+      "connection_guards": 8,
+      "rows_read": 88,
+      "rows_written": 49,
+      "fixture_bind_json_chars": 3042,
+      "response_bytes": 16,
+      "provider_sends": 1,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 2,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "message discovery + 50 message page",
+      "path": "/__audit/messages",
+      "status": 200,
+      "statements": 20,
+      "d1_calls": 11,
+      "connection_guards": 6,
+      "rows_read": 138,
+      "rows_written": 329,
+      "fixture_bind_json_chars": 17930,
+      "response_bytes": 51,
+      "provider_sends": 0,
+      "provider_reads": 2,
+      "state": {
+        "pending_events": 50,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      },
+      "audit": {
+        "remaining_raw": 60,
+        "remaining_guarded": "Infinity"
+      }
+    },
+    {
+      "label": "5 posts x 50 comments ingest only",
+      "path": "/__audit/comments",
+      "status": 200,
+      "statements": 50,
+      "d1_calls": 28,
+      "connection_guards": 16,
+      "rows_read": 334,
+      "rows_written": 1303,
+      "fixture_bind_json_chars": 98238,
+      "response_bytes": 51,
+      "provider_sends": 0,
+      "provider_reads": 5,
+      "state": {
+        "pending_events": 250,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      },
+      "audit": {
+        "remaining_raw": 30,
+        "remaining_guarded": "Infinity"
+      }
+    },
+    {
+      "label": "full cron with 5 active posts",
+      "path": "/__cron",
+      "status": 200,
+      "statements": 77,
+      "d1_calls": 42,
+      "connection_guards": 25,
+      "rows_read": 485,
+      "rows_written": 1638,
+      "fixture_bind_json_chars": 116350,
+      "response_bytes": 11,
+      "provider_sends": 0,
+      "provider_reads": 7,
+      "state": {
+        "pending_events": 300,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "100 event ingest only",
+      "path": "/__audit/ingest",
+      "status": 200,
+      "statements": 3,
+      "d1_calls": 2,
+      "connection_guards": 1,
+      "rows_read": 104,
+      "rows_written": 501,
+      "fixture_bind_json_chars": 33002,
+      "response_bytes": 51,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 100,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      },
+      "audit": {
+        "remaining_raw": 77,
+        "remaining_guarded": "Infinity"
+      }
+    },
+    {
+      "label": "single drain step",
+      "path": "/__audit/drain?steps=1",
+      "status": 200,
+      "statements": 27,
+      "d1_calls": 14,
+      "connection_guards": 6,
+      "rows_read": 365,
+      "rows_written": 45,
+      "fixture_bind_json_chars": 2856,
+      "response_bytes": 51,
+      "provider_sends": 1,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 99,
+        "confirmed": 1,
+        "unknown": 0,
+        "sending": 0
+      },
+      "audit": {
+        "remaining_raw": 53,
+        "remaining_guarded": "Infinity"
+      }
+    },
+    {
+      "label": "remaining drain default cron",
+      "path": "/__cron",
+      "status": 200,
+      "statements": 75,
+      "d1_calls": 38,
+      "connection_guards": 18,
+      "rows_read": 1077,
+      "rows_written": 138,
+      "fixture_bind_json_chars": 8366,
+      "response_bytes": 11,
+      "provider_sends": 3,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 96,
+        "confirmed": 4,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "prepare pending job with sending disabled",
+      "path": "/webhook",
+      "status": 200,
+      "statements": 28,
+      "d1_calls": 16,
+      "connection_guards": 8,
+      "rows_read": 60,
+      "rows_written": 34,
+      "fixture_bind_json_chars": 2401,
+      "response_bytes": 16,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "dispatch with six queries remaining",
+      "path": "/__audit/dispatch?budget=7",
+      "status": 500,
+      "error": "Error: Invocation work budget exhausted",
+      "statements": 7,
+      "d1_calls": 5,
+      "connection_guards": 1,
+      "rows_read": 31,
+      "rows_written": 11,
+      "fixture_bind_json_chars": 1687,
+      "provider_sends": 1,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 1
+      }
+    },
+    {
+      "label": "daily retention with ten-day-old ms ledgers",
+      "path": "/__cron?daily=1",
+      "status": 200,
+      "statements": 6,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 8,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 63,
+      "response_bytes": 11,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 1
+      }
+    },
+    {
+      "label": "owner status",
+      "path": "/api/status",
+      "status": 200,
+      "statements": 6,
+      "d1_calls": 6,
+      "connection_guards": 0,
+      "rows_read": 23,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 129,
+      "response_bytes": 856,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "campaign list",
+      "path": "/api/campaigns",
+      "status": 200,
+      "statements": 2,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 4,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 79,
+      "response_bytes": 535,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "dashboard",
+      "path": "/api/dashboard",
+      "status": 200,
+      "statements": 2,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 4,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 91,
+      "response_bytes": 565,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "contacts",
+      "path": "/api/contacts",
+      "status": 200,
+      "statements": 2,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 4,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 84,
+      "response_bytes": 20,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "automation health",
+      "path": "/api/automation",
+      "status": 200,
+      "statements": 7,
+      "d1_calls": 7,
+      "connection_guards": 0,
+      "rows_read": 36,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 82,
+      "response_bytes": 727,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "native password login",
+      "path": "/session/login",
+      "status": 200,
+      "statements": 9,
+      "d1_calls": 4,
+      "connection_guards": 0,
+      "rows_read": 8,
+      "rows_written": 11,
+      "fixture_bind_json_chars": 488,
+      "response_bytes": 64,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "daily refresh skipped + retention",
+      "path": "/__cron?daily=1",
+      "status": 200,
+      "statements": 6,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 6,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 63,
+      "response_bytes": 11,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "campaign list 10 rows",
+      "path": "/api/campaigns",
+      "status": 200,
+      "statements": 2,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 22,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 79,
+      "response_bytes": 5134,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "campaign list 100 rows",
+      "path": "/api/campaigns",
+      "status": 200,
+      "statements": 2,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 202,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 79,
+      "response_bytes": 51215,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    },
+    {
+      "label": "campaign list 1000 rows",
+      "path": "/api/campaigns",
+      "status": 200,
+      "statements": 2,
+      "d1_calls": 2,
+      "connection_guards": 0,
+      "rows_read": 2002,
+      "rows_written": 0,
+      "fixture_bind_json_chars": 79,
+      "response_bytes": 512916,
+      "provider_sends": 0,
+      "provider_reads": 0,
+      "state": {
+        "pending_events": 0,
+        "confirmed": 0,
+        "unknown": 0,
+        "sending": 0
+      }
+    }
+  ],
+  "retention_probe": {
+    "old_send_attempt_remaining": true,
+    "old_completed_event_remaining": true
+  },
+  "hash_local_wall_ms": {
+    "PBKDF2-100000": [
+      54.84,
+      51.64,
+      50.35,
+      49.38,
+      51.75,
+      48.66
+    ],
+    "legacy Argon2id": [
+      55.52,
+      57.53,
+      46.64,
+      44.84,
+      46.38,
+      48.12
+    ]
+  },
+  "hash_profile_sampled_us": [
+    [
+      "deriveBits :0",
+      345527
+    ],
+    [
+      "wasm-function[2] wasm://wasm/519e1692:1",
+      144903
+    ],
+    [
+      "wasm-function[3] wasm://wasm/519e1692:1",
+      114692
+    ],
+    [
+      "(idle) :0",
+      25898
+    ],
+    [
+      " .wrangler/cpu-investigation/worker.js:325",
+      11117
+    ],
+    [
+      "wasm-function[4] wasm://wasm/519e1692:1",
+      6124
+    ],
+    [
+      " .wrangler/cpu-investigation/worker.js:297",
+      5115
+    ],
+    [
+      "A.argon2id .wrangler/cpu-investigation/worker.js:403",
+      4991
+    ],
+    [
+      "TextEncoder :0",
+      2961
+    ],
+    [
+      "js-to-wasm :0",
+      1678
+    ],
+    [
+      "wasm-function[2] wasm://wasm/614bcfa2:1",
+      1644
+    ],
+    [
+      "(garbage collector) :0",
+      1594
+    ]
+  ],
+  "query_plans": {
+    "inbox_claim": [
+      {
+        "id": 5,
+        "parent": 0,
+        "notused": 39,
+        "detail": "SEARCH inbound_events USING INDEX sqlite_autoindex_inbound_events_1 (id=?)"
+      },
+      {
+        "id": 8,
+        "parent": 0,
+        "notused": 0,
+        "detail": "SCALAR SUBQUERY 2"
+      },
+      {
+        "id": 18,
+        "parent": 8,
+        "notused": 62,
+        "detail": "SEARCH e USING INDEX idx_inbound_events_dispatch (generation=?)"
+      },
+      {
+        "id": 34,
+        "parent": 8,
+        "notused": 0,
+        "detail": "CORRELATED SCALAR SUBQUERY 1"
+      },
+      {
+        "id": 39,
+        "parent": 34,
+        "notused": 53,
+        "detail": "SEARCH x USING COVERING INDEX inbox_recipient_progress (generation=? AND recipient=?)"
+      },
+      {
+        "id": 65,
+        "parent": 8,
+        "notused": 0,
+        "detail": "USE TEMP B-TREE FOR ORDER BY"
+      }
+    ],
+    "message_due": [
+      {
+        "id": 5,
+        "parent": 0,
+        "notused": 50,
+        "detail": "SEARCH polling_checkpoints USING INDEX checkpoint_due (generation=? AND next_at<?)"
+      },
+      {
+        "id": 28,
+        "parent": 0,
+        "notused": 0,
+        "detail": "USE TEMP B-TREE FOR ORDER BY"
+      }
+    ]
+  },
+  "unit_tests": {
+    "total": 306,
+    "passed": 304,
+    "failed": 2,
+    "failures": [
+      {
+        "file": "test/pollInterval.test.ts",
+        "name": "the default config a fresh clone deploys ships polling, not webhook"
+      },
+      {
+        "file": "test/pollInterval.test.ts",
+        "name": "the default config a fresh clone deploys uses three-minute reconciliation while retaining minute recovery ticks"
+      }
+    ]
+  },
+  "typecheck": "passed"
+}
