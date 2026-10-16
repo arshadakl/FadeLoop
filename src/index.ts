@@ -22,7 +22,7 @@ const REFRESH_CRON = "0 3 * * *";
 
 export default {
   async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
-    env = {...env, DB:budgetDatabase(env.DB, 80)};
+    env = {...env, DB:budgetDatabase(env.DB, 40)};
     let result: Response;
     try { result = await routeRequest(req, env, ctx); } catch (error) {
       if (String(error).includes('UNIQUE constraint failed: campaigns.media_id')) {
@@ -43,7 +43,7 @@ export default {
   },
 
   async scheduled(event: ScheduledController, env: Env): Promise<void> {
-    env = {...env,DB:budgetDatabase(env.DB, 80)};
+    env = {...env,DB:budgetDatabase(env.DB, 40)};
     if (event.cron === REFRESH_CRON) {
       const result = await refreshTokenIfDue(env);
       console.log(`[FadeLoop] token refresh: ${result.status}`);

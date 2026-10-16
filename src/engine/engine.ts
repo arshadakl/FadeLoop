@@ -1,12 +1,12 @@
 // All transports enter the same durable inbox/outbox. Never retry an ambiguous send.
-import { InstagramApiError, type InstagramClient } from '../api/client';
+import { InstagramApiError, ProviderRequestNotStarted, type InstagramClient } from '../api/client';
 import { ConnectionChangedError } from '../connection';
 import type { SendQueue } from '../queue/queue';
 import type { Campaign, NormalizedComment, NormalizedEvent, NormalizedMessage, State } from '../types';
 import { validateCampaign } from '../config';
 import { commentTriggers, extractEmail } from './match';
 import { afterFollow, afterTap, matchesLabel, parsePayload } from './transitions';
-import { WorkBudgetExceeded } from '../reliability/budget';
+import { WorkBudgetExceeded,reserveQueries } from '../reliability/budget';
 import {terminalConversation} from '../reliability/conversation';
 
 export type SendOutcome = 'confirmed' | 'pending' | 'retry_scheduled' | 'unknown' | 'rejected' | 'held' | 'cancelled';
@@ -288,12 +288,12 @@ export class Engine {
       AND EXISTS(SELECT 1 FROM outbound_jobs WHERE id=? AND finalized=0 AND status NOT IN ('cancelled','rejected'))`)
       .bind(id,row.campaign_id,recipient,row.instance_id,version,id);
   }
-  async dispatchOne(): Promise<boolean> {
-    if(this.options.maintenance || this.remaining()<6 || this.clock()+3_000> (this.options.deadline??Infinity))return false;
+  async dispatchOne(jobId?:string): Promise<boolean> {
+    if(this.options.maintenance || this.remaining()<18 || this.clock()+3_000> (this.options.deadline??Infinity))return false;
     let t=this.clock();
     const job=await this.db.prepare(`SELECT j.* FROM outbound_jobs j JOIN campaigns p ON p.instance_id=j.campaign_instance AND p.campaign_id=j.campaign_id
-      WHERE j.generation=? AND j.status IN ('pending','retry_scheduled','held') AND j.next_at<=? AND p.active=1 AND p.archived_at IS NULL ORDER BY j.updated_at,j.id LIMIT 1`)
-      .bind(this.generation,t).first<OutboundJob>();
+      WHERE j.generation=? AND j.status IN ('pending','retry_scheduled','held') AND j.next_at<=? AND p.active=1 AND p.archived_at IS NULL ${jobId?'AND j.id=?':''} ORDER BY j.updated_at,j.id LIMIT 1`)
+      .bind(this.generation,t,...(jobId?[jobId]:[])).first<OutboundJob>();
     if(!job)return false;
     const request=JSON.parse(job.request_json) as RequestSnapshot;
     if(request.expiresAt<=t){
@@ -326,6 +326,9 @@ export class Engine {
       }
     }
 
+    const completion=reserveQueries(this.db,12);
+    if(!completion)return false;
+    try {
     const token=crypto.randomUUID();
     // One transaction serializes the account budget, ownership and dispatch authorization.
     const results=await this.db.batch([
@@ -361,17 +364,19 @@ export class Engine {
       }
       const id=request.method==='reply'?result?.id:result?.message_id;
       if(typeof id!=='string'||!id.trim())throw new Error('Missing provider acknowledgement');
-      await this.confirm(job,token,'provider',id);
+      await completion.run(()=>this.confirm(job,token,'provider',id));
     }catch(error){
       if(error instanceof ConnectionChangedError)throw error;
-      await this.recordFailure(job,token,error);
+      await completion.run(()=>this.recordFailure(job,token,error));
     }
     return true;
+    } finally { completion.release(); }
   }
   private async recordFailure(job:OutboundJob,token:string,error:unknown):Promise<void>{
     const t=this.clock();let status:SendOutcome='unknown',next=0,reason='Send outcome unknown; no automatic replay';
     const api=error instanceof InstagramApiError?error:null;
-    if(api && api.status<500 && api.isRateLimit){status=job.attempts<4?'retry_scheduled':'rejected';next=t+Math.max(60_000*2**(job.attempts-1)+Math.floor(Math.random()*30_001),(api.retryAfterSeconds??0)*1000);reason=status==='rejected'?'Rate-limit retry budget exhausted':'Provider rate limit';}
+    if(error instanceof ProviderRequestNotStarted){status='held';next=t+60_000;reason='Provider preflight unavailable; no request started';}
+    else if(api && api.status<500 && api.isRateLimit){status=job.attempts<4?'retry_scheduled':'rejected';next=t+Math.max(60_000*2**(job.attempts-1)+Math.floor(Math.random()*30_001),(api.retryAfterSeconds??0)*1000);reason=status==='rejected'?'Rate-limit retry budget exhausted':'Provider rate limit';}
     else if(api && api.status<500 && (api.status===401||api.code===190)){status='held';next=t+3600_000;reason='Instagram authorization requires attention';}
     else if(api && api.status>=400 && api.status<500 && [100,10,200,551,10903].includes(api.code??-1)){status='rejected';reason='Provider rejected the request';}
     await this.db.batch([

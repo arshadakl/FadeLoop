@@ -1,3 +1,4 @@
+import {shareQueryBudget,WorkBudgetExceeded} from './reliability/budget';
 /** A generation scopes every Instagram-dependent mutation to one connection lifetime. */
 export class ConnectionChangedError extends Error {
   constructor() { super("Instagram connection changed. Refresh and try again."); }
@@ -30,6 +31,7 @@ export function guardedConnectionDb(db: D1Database, generation: number): D1Datab
       const result = await db.batch<T>([connectionGuard(db, generation), ...statements.map(s => originals.get(s) ?? s)]);
       return result.slice(1);
     } catch (error) {
+      if(error instanceof WorkBudgetExceeded)throw error;
       await assertConnection(db, generation);
       throw error;
     }
@@ -49,11 +51,11 @@ export function guardedConnectionDb(db: D1Database, generation: number): D1Datab
     originals.set(proxy, statement);
     return proxy;
   }
-  return new Proxy(db, { get(target, property) {
+  return shareQueryBudget(new Proxy(db, { get(target, property) {
     if (property === "prepare") return (sql: string) => wrap(target.prepare(sql), /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql));
     if (property === "batch") return batch;
     if (property === "exec") return () => { throw new Error("Use prepared statements for connection-scoped writes"); };
     const value = Reflect.get(target, property);
     return typeof value === "function" ? value.bind(target) : value;
-  } });
+  } }),db);
 }
