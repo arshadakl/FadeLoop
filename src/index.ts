@@ -15,15 +15,18 @@ import { handleConfigExport, handleConfigImport } from "./routes/config";
 import { handleWebhookAdmin, handleWebhookEvent, handleWebhookVerify } from "./routes/webhook";
 import { handleApi } from "./routes/api";
 import { json } from "./routes/http";
-import {cleanupRetention} from './reliability/retention';
 import { getSession, handleSession, sameOrigin } from "./auth/session";
 import {getOwnerSession} from './auth/owner';
 import {AccessConfigurationError} from './auth/access';
+import {cleanupRetention} from './reliability/retention';
+import {consumeTasks} from './tasks/consumer';
+import {taskWatchdog} from './tasks/watchdog';
+import type {Notification} from './tasks/store';
 
-const POLL_CRON = "* * * * *";
 const REFRESH_CRON = "0 3 * * *";
 
 export default {
+  async queue(batch:MessageBatch<unknown>,env:Env):Promise<void>{await consumeTasks(batch as MessageBatch<Notification>,env);},
   async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     env = {...env, DB:budgetDatabase(env.DB, 40)};
     let result: Response;
@@ -60,7 +63,8 @@ export default {
       }
       return;
     }
-    if (event.cron === POLL_CRON) {
+    if (event.cron !== REFRESH_CRON) {
+      if(env.EXECUTION_MODE==='tasks'){await taskWatchdog(env);return;}
       const interval = pollIntervalSeconds(env);
       await runPoll(env, interval);
     }
@@ -111,6 +115,7 @@ async function routeRequest(req: Request, env: Env, ctx?: ExecutionContext): Pro
       if (pathname === "/config/export" && method === "GET") return handleConfigExport(env);
       // Manual poll trigger for testing without waiting for cron.
       if (pathname === "/admin/poll" && method === "POST") {
+        if(env.EXECUTION_MODE==='tasks'){await taskWatchdog(env);return json({ok:true,ran:'bounded task scheduling'});}
         await runPoll(env, pollIntervalSeconds(env) ?? 30);
         return json({ ok: true, ran: "poll" });
       }

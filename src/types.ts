@@ -23,6 +23,10 @@ export interface Env {
   ACCESS_OWNER_SUBJECT?: string;
   /** Separate Access application enforcing fresh user verification for destructive actions. */
   ACCESS_ACTION_AUDIENCE?: string;
+  /** Enable only after migration 0012 and both Queue bindings are ready. */
+  EXECUTION_MODE?: 'inline' | 'tasks';
+  WORK_QUEUE?: Queue<{schema:1;taskId:string;generation:number}>;
+  SEND_QUEUE?: Queue<{schema:1;taskId:string;generation:number}>;
 
   // secrets (wrangler secret put ...)
   APP_ID: string;

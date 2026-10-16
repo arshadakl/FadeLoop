@@ -40,7 +40,7 @@ export async function buildRuntime(env: Env, allowExpiredIngestion=false): Promi
   const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId, check,deadline);
   const queue = new SendQueue({ beforeAttempt: check, maxRetries: 0 });
   const engine = new Engine(db, client, queue,{generation:auth.connection_generation,igUserId,
-    maintenance:expired||env.AUTOMATION_MAINTENANCE==='true',deadline,remainingQueries:()=>remainingQueries(env.DB)});
+    maintenance:expired||env.AUTOMATION_MAINTENANCE==='true',deadline,remainingQueries:()=>remainingQueries(env.DB),durableTasks:env.EXECUTION_MODE==='tasks'});
   return { client, queue, engine, auth, igUserId, db };
 }
 

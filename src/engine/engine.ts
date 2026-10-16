@@ -20,7 +20,7 @@ export interface OutboundJob {
   status: SendOutcome | 'sending'; attempts: number; owner_token: string | null; dispatch_at: number | null;
   finalized: number; provider_id: string | null; created_at: number; updated_at: number;
 }
-interface Options { generation?: number; igUserId?: string; maintenance?: boolean; now?: () => number; remainingQueries?: () => number; deadline?:number }
+interface Options { generation?: number; igUserId?: string; maintenance?: boolean; now?: () => number; remainingQueries?: () => number; deadline?:number; durableTasks?:boolean }
 const FOLLOW_TEXT = "Make sure you're following so you don't miss the next one 🙌 Not following yet? Follow, then tap below.";
 const FOLLOW_TITLE = '✅ I followed';
 const title = (value: unknown, fallback: string) => {
@@ -46,7 +46,7 @@ export class Engine {
   async handleMessage(event: NormalizedMessage): Promise<void> { await this.ingest([event], 'direct'); await this.drain(); }
 
   /** A page and its checkpoint commit together. No provider calls before this commits. */
-  async ingest(events: NormalizedEvent[], source: string, checkpoint?: { key: string; cursor: string | null; boundary: number; nextAt?: number; attemptAt?:number }): Promise<void> {
+  async ingest(events: NormalizedEvent[], source: string, checkpoint?: { key: string; cursor: string | null; boundary: number; nextAt?: number; attemptAt?:number }, extraStatements:D1PreparedStatement[]=[]): Promise<void> {
     const t = this.clock();
     // Collapse byte-identical copies within this page before hashing and SQL.
     // Keep richer versions of the same provider event: the inbox upsert may need
@@ -62,15 +62,42 @@ export class Engine {
       recipient: event.igsid, event_ms: Number.isFinite(event.timestamp_ms??event.timestamp*1000) ? event.timestamp_ms??event.timestamp*1000 : 0,
       content,
     })));
+    const serialized=JSON.stringify(rows);
     const statements = [this.db.prepare(`INSERT INTO inbound_events(id,generation,recipient,source,event_ms,content_json,created_at)
       SELECT json_extract(value,'$.id'), ?, json_extract(value,'$.recipient'), ?, json_extract(value,'$.event_ms'), json_extract(value,'$.content'), ? FROM json_each(?) WHERE 1 ON CONFLICT(id) DO UPDATE SET recipient=excluded.recipient,event_ms=excluded.event_ms,content_json=excluded.content_json,next_at=0 WHERE inbound_events.status='pending' AND (inbound_events.recipient='' OR inbound_events.event_ms=0) AND excluded.recipient!='' AND excluded.event_ms>0`)
-      .bind(this.generation, source, t, JSON.stringify(rows))];
+      .bind(this.generation, source, t, serialized)];
+    if(this.options.durableTasks)statements.push(this.db.prepare(`INSERT INTO work_tasks(id,generation,kind,reference,next_at_ms,updated_at_ms)
+      SELECT 'plan:'||e.generation||':'||e.id,e.generation,'plan',e.id,e.next_at,? FROM inbound_events e
+      WHERE e.generation=? AND e.status='pending' AND e.id IN(SELECT json_extract(value,'$.id') FROM json_each(?))
+      ON CONFLICT(id) DO UPDATE SET revision=work_tasks.revision+1,status=CASE WHEN work_tasks.status='leased' THEN 'leased' ELSE 'pending' END,
+      next_at_ms=MIN(work_tasks.next_at_ms,excluded.next_at_ms),updated_at_ms=excluded.updated_at_ms`).bind(t,this.generation,serialized));
     if (checkpoint) statements.push(this.db.prepare(`INSERT INTO polling_checkpoints(key,generation,cursor,boundary,next_at,updated_at) VALUES(?,?,?,?,?,?)
       ON CONFLICT(key) DO UPDATE SET cursor=excluded.cursor,boundary=excluded.boundary,next_at=excluded.next_at,updated_at=excluded.updated_at,generation=excluded.generation,
         failure_count=0,last_error=NULL WHERE ? IS NULL OR (polling_checkpoints.generation=excluded.generation AND polling_checkpoints.last_attempt_at=?)`)
       .bind(checkpoint.key, this.generation, checkpoint.cursor, checkpoint.boundary, checkpoint.nextAt ?? 0, t,checkpoint.attemptAt??null,checkpoint.attemptAt??null));
-    await this.db.batch(statements);
+    await this.db.batch([...statements,...extraStatements]);
     if (rows.length) this.mayHaveWork = true;
+  }
+
+  /** Plan one known durable event. Never dispatch provider side effects here. */
+  async planEvent(id:string):Promise<number|undefined>{
+    const t=this.clock(),token=crypto.randomUUID();
+    const event=await this.db.prepare(`UPDATE inbound_events SET status='processing',lease_token=?,lease_until=?,touched_at=?
+      WHERE id=? AND generation=? AND ((status='pending' AND next_at<=?) OR(status='processing' AND lease_until<?))
+      AND NOT EXISTS(SELECT 1 FROM inbound_events older WHERE older.generation=inbound_events.generation AND older.recipient=inbound_events.recipient
+        AND older.id!=inbound_events.id AND older.status!='done' AND (older.event_ms<inbound_events.event_ms OR(older.event_ms=inbound_events.event_ms AND older.id<inbound_events.id)))
+      RETURNING content_json`).bind(token,t+30_000,t,id,this.generation,t,t).first<{content_json:string}>();
+    if(!event){const row=await this.db.prepare('SELECT status,next_at FROM inbound_events WHERE id=? AND generation=?').bind(id,this.generation).first<{status:string;next_at:number}>();return row&&row.status!=='done'?Math.max(t+30_000,row.next_at):undefined;}
+    const done=await this.plan(JSON.parse(event.content_json) as NormalizedEvent,id);
+    await this.db.batch([
+      this.db.prepare(`UPDATE inbound_events SET status=?,next_at=?,error=CASE WHEN ?=1 THEN NULL ELSE error END WHERE id=? AND lease_token=?`)
+        .bind(done?'done':'pending',t+60_000,done?1:0,id,token),
+      this.db.prepare(`INSERT INTO work_tasks(id,generation,kind,reference,next_at_ms,updated_at_ms)
+        SELECT 'dispatch:'||generation||':'||id,generation,'dispatch',id,next_at,? FROM outbound_jobs WHERE generation=? AND event_id=? AND status IN('pending','held','retry_scheduled')
+        ON CONFLICT(id) DO UPDATE SET status=CASE WHEN work_tasks.status='leased' THEN 'leased' ELSE 'pending' END,next_at_ms=excluded.next_at_ms,updated_at_ms=excluded.updated_at_ms`)
+        .bind(t,this.generation,id),
+    ]);
+    return done?undefined:t+60_000;
   }
 
   /** Bounded on both SQL and wall time. Cron resumes durable leftovers. */

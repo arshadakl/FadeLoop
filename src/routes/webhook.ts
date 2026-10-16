@@ -18,6 +18,10 @@ import { WEBHOOK_FIELDS } from "../api/client";
 import { buildRuntime, toUnixSeconds } from "../runtime";
 import type { Env, NormalizedComment, NormalizedMessage, NormalizedEvent } from "../types";
 import { json } from "./http";
+import {readBoundedBytes} from './body';
+import {persistEnvelope} from '../tasks/ingress';
+import {publishTasks} from '../tasks/store';
+import {guardedConnectionDb} from '../connection';
 
 /** GET /webhook — Meta subscription verification handshake. */
 export function handleWebhookVerify(env: Env, url: URL): Response {
@@ -97,11 +101,23 @@ export async function handleWebhookAdmin(env: Env, method: string): Promise<Resp
 /** POST /webhook — verify signature, then dispatch normalized events to the engine. */
 export async function handleWebhookEvent(env: Env, req: Request, ctx?: ExecutionContext): Promise<Response> {
   const generation = await connectionGeneration(env.DB);
-  const raw = await req.text();
-  if(new TextEncoder().encode(raw).length>512*1024)return json({error:'Webhook batch too large'},413);
+  const bytes=await readBoundedBytes(req,512*1024);
+  if(!bytes)return json({error:'Webhook batch too large'},413);
+  const raw = new TextDecoder().decode(bytes);
   const sig = req.headers.get("x-hub-signature-256");
-  if (!(await verifySignature(env.APP_SECRET, raw, sig))) {
+  if (!(await verifySignature(env.APP_SECRET, bytes, sig))) {
     return new Response("invalid signature", { status: 401 });
+  }
+
+  if(env.EXECUTION_MODE==='tasks'){
+    const auth=await getAuth(env.DB);
+    if(!auth||auth.connection_generation!==generation)return json({ok:true,note:'Disconnected or connection changed'});
+    if(!auth.ig_user_id)return json({error:'Connected account identity unresolved; retry after reconnection'},503);
+    try{await persistEnvelope(env,generation,raw);}catch{return json({error:'Webhook persistence failed; retry'},503);}
+    const notify=()=>publishTasks(env,guardedConnectionDb(env.DB,generation),generation,1).catch(()=>console.warn('[FadeLoop] notification retained for recovery'));
+    if(ctx)ctx.waitUntil(notify());else await notify();
+    // This invocation publishes only a hint. Planning/sending run in their own invocations.
+    return json({ok:true});
   }
 
   let body: WebhookBody;
@@ -181,7 +197,7 @@ export async function handleWebhookEvent(env: Env, req: Request, ctx?: Execution
   return json({ok:true});
 }
 
-async function verifySignature(appSecret: string, raw: string, header: string | null): Promise<boolean> {
+async function verifySignature(appSecret: string, raw: Uint8Array, header: string | null): Promise<boolean> {
   if (!header || !header.startsWith("sha256=") || !appSecret) return false;
   const expectedHex = header.slice("sha256=".length);
   if (expectedHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(expectedHex)) return false;
@@ -196,7 +212,7 @@ async function verifySignature(appSecret: string, raw: string, header: string | 
     false,
     ["verify"]
   );
-  return crypto.subtle.verify("HMAC", key, expectedBytes, new TextEncoder().encode(raw));
+  return crypto.subtle.verify("HMAC", key, expectedBytes, raw);
 }
 
 // ---- webhook payload shapes (subset we consume) ----
